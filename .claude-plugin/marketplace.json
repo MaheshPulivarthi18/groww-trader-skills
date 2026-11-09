@@ -1,0 +1,11 @@
+{
+  "name": "groww-trader-skills",
+  "owner": {"name": "MaheshPulivarthi18"},
+  "plugins": [
+    {
+      "name": "groww-trader-skills",
+      "source": "./",
+      "description": "Scan, plan, size, risk-check and backtest NSE trades with your own Groww account. Paper first."
+    }
+  ]
+}

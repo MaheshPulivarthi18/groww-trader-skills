@@ -1,0 +1,13 @@
+# Your personal trading folder: config, cached data, orders, journal
+trader/
+
+# Never commit credentials
+.env
+*.env
+secrets*
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store

@@ -1,0 +1,9 @@
+{
+  "name": "groww-trader-skills",
+  "version": "0.1.0",
+  "description": "Claude skills for trading Indian markets with your own Groww account: scan, plan exits, size, risk-check and backtest after Indian charges. Paper first. Not financial advice.",
+  "author": {"name": "MaheshPulivarthi18"},
+  "repository": "https://github.com/MaheshPulivarthi18/groww-trader-skills",
+  "license": "MIT",
+  "keywords": ["trading", "groww", "nse", "india", "backtesting", "claude-skills"]
+}
