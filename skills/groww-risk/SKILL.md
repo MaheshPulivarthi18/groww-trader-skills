@@ -26,7 +26,7 @@ python3 <repo>/gtrade.py show                # tickets in plain words
 - no shorts unless `allow_short`
 - now inside `no_entry_before` .. `no_entry_after`, before the trade's flat-by, and the signal is from today
 
-Today's history comes from `trader/journal.json` (list of `{"day", "symbol", "status": "open"|"closed", "net"}`). If it doesn't exist, say so: the daily limits can't see trades made elsewhere.
+Today's history comes from `trader/journal.json` (written by `groww-paper`; entries with status pending, open or closed count, blocked/missed/cancelled ideas do not). If it doesn't exist, say so: the daily limits can't see trades made elsewhere.
 
 ## Rules for Claude
 

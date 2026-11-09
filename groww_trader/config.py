@@ -52,7 +52,10 @@ DEFAULTS: Dict[str, Any] = {
         "intraday": {"stt_sell_pct": 0.025, "stt_buy_pct": 0.0, "stamp_buy_pct": 0.003},
         "delivery": {"stt_sell_pct": 0.1, "stt_buy_pct": 0.1, "stamp_buy_pct": 0.015},
     },
-    "slippage_pct": 0.02,      # per side, applied in backtests
+    "slippage_pct": 0.02,      # per side, applied in backtests and paper trading
+    "paper_trading": {
+        "max_signal_age_min": 10,  # ignore triggers older than this when first seen
+    },
 }
 
 

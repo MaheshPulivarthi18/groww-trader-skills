@@ -3,6 +3,8 @@ Nothing downstream may act on an order that is not PASS.
 
 Today's activity comes from trader/journal.json, a list of entries like
   {"day": "2026-11-10", "symbol": "SBIN", "status": "open"|"closed", "net": -212.5}
+Only pending/open/closed entries count as trades; blocked, missed and
+cancelled ideas are kept in the journal for the record but don't count.
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ from typing import Any, Dict, List, Optional
 
 from .market import IST, parse_hhmm, parse_ts
 
+LIVE_STATUSES = ("pending", "open", "closed")
+
 
 def check(orders: List[Dict[str, Any]], cfg: Dict[str, Any], journal: Optional[List[Dict[str, Any]]] = None,
           now: Optional[datetime] = None) -> List[Dict[str, Any]]:
@@ -20,11 +24,11 @@ def check(orders: List[Dict[str, Any]], cfg: Dict[str, Any], journal: Optional[L
     out = []
     for o in orders:
         day = o.get("day")
-        today = [j for j in journal if j.get("day") == day]
+        today = [j for j in journal if j.get("day") == day and j.get("status") in LIVE_STATUSES]
         realized = sum(float(j.get("net", 0)) for j in today if j.get("status") == "closed")
-        trades = len(today) + sum(1 for x in out if x["risk_check"] == "PASS" and x.get("day") == day)
-        open_pos = sum(1 for j in today if j.get("status") == "open") + \
-            sum(1 for x in out if x["risk_check"] == "PASS" and x.get("day") == day)
+        passed_now = sum(1 for x in out if x["risk_check"] == "PASS" and x.get("day") == day)
+        trades = len(today) + passed_now
+        open_pos = sum(1 for j in today if j.get("status") in ("pending", "open")) + passed_now
 
         why = []
         qty = int(o.get("qty", 0))

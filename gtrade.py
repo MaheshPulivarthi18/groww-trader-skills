@@ -205,6 +205,97 @@ def cmd_backtest(args, cfg):
         out({k: v for k, v in res.items() if k != "trades"})
 
 
+def _paper_data(src, symbols, interval, until=None):
+    data, errors = {}, {}
+    for s in symbols:
+        try:
+            data[s] = get_candles(src, s, interval, 7, until)
+        except Exception as e:  # one bad symbol must not stop the loop
+            errors[s] = str(e)
+    return data, errors
+
+
+def _paper_status(journal, day):
+    today = [e for e in journal if e.get("day") == str(day)]
+    n = lambda st: sum(1 for e in today if e["status"] == st)
+    net = round(sum(e.get("net", 0) for e in today if e["status"] == "closed"), 2)
+    return f"open {n('open')}, pending {n('pending')}, closed {n('closed')}, today's net ₹{net}"
+
+
+def cmd_paper(args, cfg):
+    import time
+    from groww_trader import paper
+
+    interval = args.interval or cfg["interval_min"]
+    symbols = [s.upper() for s in (args.symbols or cfg["watchlist"])]
+
+    if args.action == "report":
+        name = "journal_replay.json" if args.replay else "journal.json"
+        out(paper.report(read_json(name, []), day=args.date))
+        return
+
+    if args.action == "replay":
+        if not args.date:
+            sys.exit("replay needs --date YYYY-MM-DD")
+        day = date.fromisoformat(args.date)
+        src = get_source(args.source, cfg["exchange"])
+        data, errors = _paper_data(src, symbols, interval, until=day)
+        journal, log = paper.replay(cfg, data, day, interval)
+        for line in log:
+            print(line)
+        if errors:
+            print(f"data errors: {errors}")
+        if args.write:
+            old = [e for e in read_json("journal_replay.json", []) if e.get("day") != str(day)]
+            write_json("journal_replay.json", old + journal)
+        out(paper.report(journal))
+        return
+
+    src = get_source(args.source, cfg["exchange"])
+    if not cfg.get("paper", True):
+        print("note: config has paper=false, but this command only ever simulates. No orders are sent.")
+
+    def one_step(now):
+        journal = read_json("journal.json", [])
+        data, errors = _paper_data(src, symbols, interval)
+        journal, events = paper.step(cfg, data, now, journal, interval)
+        write_json("journal.json", journal)
+        for ev in events:
+            print(f"[{now:%H:%M}] {ev}", flush=True)
+        for s, err in errors.items():
+            print(f"[{now:%H:%M}] data error {s}: {err}", flush=True)
+        print(f"[{now:%H:%M}] {_paper_status(journal, now.date())}", flush=True)
+
+    if args.action == "once":
+        now = datetime.fromisoformat(args.now).replace(tzinfo=IST) if args.now else now_ist()
+        one_step(now)
+        return
+
+    # run: loop until the close
+    print(f"Paper trading {', '.join(symbols)} on {interval}-minute bars. No orders are sent. Ctrl+C to stop.")
+    from groww_trader.market import MARKET_CLOSE
+    try:
+        while True:
+            now = now_ist()
+            close = datetime.combine(now.date(), MARKET_CLOSE, tzinfo=IST)
+            if now.weekday() >= 5:
+                print("Market closed (weekend).")
+                break
+            if now > close + timedelta(minutes=10):
+                one_step(close + timedelta(minutes=1))
+                out(paper.report(read_json("journal.json", []), day=str(now.date())))
+                break
+            wake = paper.next_boundary(now, interval)
+            if now >= datetime.combine(now.date(), parse_hhmm("09:15"), tzinfo=IST):
+                try:
+                    one_step(now)
+                except Exception as e:
+                    print(f"[{now:%H:%M}] step failed, will retry next bar: {e}", flush=True)
+            time.sleep(max(1.0, (wake - now_ist()).total_seconds()))
+    except KeyboardInterrupt:
+        print("\nStopped. Journal is saved in trader/journal.json; run again to resume.")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", help="config file (default trader/config.json)")
@@ -251,6 +342,16 @@ def main(argv=None):
     p.add_argument("--next", type=int, default=20, help="trades to project in the outlook")
     p.add_argument("--trades", action="store_true", help="include every trade in the output")
     p.add_argument("--write", action="store_true")
+    p = sub.add_parser("paper", help="simulated trading on live data; never sends orders")
+    p.set_defaults(fn=cmd_paper)
+    p.add_argument("action", choices=["run", "once", "replay", "report"])
+    p.add_argument("symbols", nargs="*")
+    p.add_argument("--source", default="auto", choices=["auto", "csv", "groww"])
+    p.add_argument("--interval", type=int)
+    p.add_argument("--date", help="replay: session to replay; report: only this day")
+    p.add_argument("--now", help="once: YYYY-MM-DDTHH:MM, step as of this IST time")
+    p.add_argument("--replay", action="store_true", help="report on replay journal")
+    p.add_argument("--write", action="store_true", help="replay: save to trader/journal_replay.json")
 
     args = ap.parse_args(argv)
     cfg = load_config(args.config)

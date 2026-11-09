@@ -17,6 +17,8 @@ import random
 import statistics
 from typing import Any, Dict, List, Optional
 
+from datetime import datetime, timedelta
+
 from .costs import net_pnl
 from .market import Candle, by_session, parse_ts
 from .plan import make_plan
@@ -24,39 +26,57 @@ from .setups import detect
 from .sizing import size
 
 
-def _simulate(order: Dict[str, Any], bars: List[Candle], start_idx: int, slip: float) -> Optional[Dict[str, Any]]:
+def walk_exit(side: str, stop: float, target: float, flat: datetime, bars: List[Candle],
+              start_idx: int, interval_min: int, until: Optional[datetime] = None):
+    """Walk bars from `start_idx` and return (raw_exit_price, reason, bar_ts) for
+    the first stop / target / flat-by hit, or None if nothing has hit yet.
+
+    With `until` (live/paper use) only bars that have CLOSED by `until` are
+    judged on their high/low; a bar that has merely opened can still trigger
+    the flat-by exit at its open. Shared by backtest and paper trading so both
+    follow identical rules."""
+    long = side == "BUY"
+    for b in bars[start_idx:]:
+        if b.ts >= flat:
+            if until is not None and b.ts > until:
+                return None
+            return b.open, "time", b.ts
+        if until is not None and b.ts + timedelta(minutes=interval_min) > until:
+            return None  # bar still forming
+        if long:
+            if b.low <= stop:
+                return (b.open if b.open < stop else stop), "stop", b.ts
+            if b.high >= target:
+                return (b.open if b.open > target else target), "target", b.ts
+        else:
+            if b.high >= stop:
+                return (b.open if b.open > stop else stop), "stop", b.ts
+            if b.low <= target:
+                return (b.open if b.open < target else target), "target", b.ts
+    return None
+
+
+def slipped(price: float, side: str, leg: str, slip: float) -> float:
+    """Apply slippage against the trader. leg is 'entry' or 'exit'."""
+    buying = (side == "BUY") == (leg == "entry")
+    return round(price * (1 + slip if buying else 1 - slip), 2)
+
+
+def _simulate(order: Dict[str, Any], bars: List[Candle], start_idx: int, slip: float,
+              interval_min: int) -> Optional[Dict[str, Any]]:
     if start_idx >= len(bars):
         return None
-    long = order["side"] == "BUY"
-    stop, target = order["stop"], order["target"]
     flat = parse_ts(order["flat_by"])
     first = bars[start_idx]
     if first.ts >= flat:
         return None
-    entry = first.open * (1 + slip if long else 1 - slip)
-    exit_px, reason, exit_ts = None, None, None
-    for b in bars[start_idx:]:
-        if b.ts >= flat:
-            exit_px, reason, exit_ts = b.open, "time", b.ts
-            break
-        if long:
-            if b.low <= stop:
-                exit_px, reason = (b.open if b.open < stop else stop), "stop"
-            elif b.high >= target:
-                exit_px, reason = (b.open if b.open > target else target), "target"
-        else:
-            if b.high >= stop:
-                exit_px, reason = (b.open if b.open > stop else stop), "stop"
-            elif b.low <= target:
-                exit_px, reason = (b.open if b.open < target else target), "target"
-        if reason:
-            exit_ts = b.ts
-            break
-    if exit_px is None:
-        exit_px, reason, exit_ts = bars[-1].close, "session_end", bars[-1].ts
-    exit_px = exit_px * (1 - slip if long else 1 + slip)
-    return {"fill_entry": round(entry, 2), "fill_exit": round(exit_px, 2), "exit_reason": reason,
-            "exit_time": exit_ts.isoformat()}
+    entry = slipped(first.open, order["side"], "entry", slip)
+    hit = walk_exit(order["side"], order["stop"], order["target"], flat, bars, start_idx, interval_min)
+    if hit is None:
+        hit = (bars[-1].close, "session_end", bars[-1].ts)
+    px, reason, ts = hit
+    return {"fill_entry": entry, "fill_exit": slipped(px, order["side"], "exit", slip),
+            "exit_reason": reason, "exit_time": ts.isoformat()}
 
 
 def run(symbol: str, candles: List[Candle], setup: str, cfg: Dict[str, Any], interval_min: int) -> Dict[str, Any]:
@@ -88,7 +108,7 @@ def run(symbol: str, candles: List[Candle], setup: str, cfg: Dict[str, Any], int
         if order["qty"] <= 0:
             status_counts["too_small"] = status_counts.get("too_small", 0) + 1
             continue
-        sim = _simulate(order, bars, idx + 1, slip)
+        sim = _simulate(order, bars, idx + 1, slip, interval_min)
         if sim is None:
             status_counts["no_fill"] = status_counts.get("no_fill", 0) + 1
             continue

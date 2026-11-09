@@ -21,13 +21,25 @@ Inspired by the design of [day-trader-skill](https://github.com/jakeschincariol/
 | `groww-budget` | quantity so the loss at the stop, after charges, fits your limit | `trader/orders.json` |
 | `groww-risk` | PASS or BLOCK every ticket against your rules | `trader/orders.json` |
 | `groww-backtest` | replay the rule over past sessions after slippage and charges | `trader/backtest.json` |
+| `groww-paper` | run the whole pipeline on live data and record simulated trades; never sends orders | `trader/journal.json` |
 
 Each skill reads what the previous one wrote:
 
 ```
 scanner -> exit -> budget -> risk           (one trade idea)
 backtest                                    (before you trust any rule)
+paper                                       (weeks of forward testing on live data)
 ```
+
+## Paper trading
+
+```
+python3 gtrade.py paper run          # start before 09:15, leave running; one step every 5-minute bar
+python3 gtrade.py paper report       # results so far
+python3 gtrade.py paper replay --date 2026-11-09   # rehearse a past session offline
+```
+
+Each bar it scans, plans, sizes and risk-checks new triggers, fills them at the next bar's open plus slippage, and exits on stop, target or flat-by. It uses the same exit code as the backtest, so you can compare the two directly. It only reads data, so it doesn't need a static IP. Stopping and restarting is safe; everything is in `trader/journal.json`. Run it for a few weeks before reading anything into the results, and remember real fills are usually a little worse than paper ones.
 
 ## Install
 
@@ -108,7 +120,7 @@ Conservative on purpose: entry at the next bar's open plus slippage; if a bar to
 python3 -m unittest discover -s tests -v
 ```
 
-Offline, on synthetic candles (not real market data). They pin the charge math, setup triggers, sizing, the risk gate, the backtest fill model and the full CLI pipeline.
+Offline, on synthetic candles (not real market data). They pin the charge math, setup triggers, sizing, the risk gate, the backtest fill model, paper trading (no peeking at unfinished bars, restart-safe, identical results to the backtest) and the full CLI pipeline.
 
 ## Fine print
 
@@ -120,7 +132,7 @@ Offline, on synthetic candles (not real market data). They pin the charge math, 
 
 ## Roadmap
 
-- `groww-broker`: paper-mode order journal first; live orders via `growwapi` only after risk PASS and an explicit yes per order
+- `groww-broker`: live orders via `growwapi` only after risk PASS and an explicit yes per order, from a static IP registered with Groww
 - `groww-alerts`: stop, target and flat-by reminders
 - `groww-news`: NSE/BSE corporate announcements for the watchlist
 - More setups (VWAP reclaim, gap-and-go), delivery (CNC) swing backtests
