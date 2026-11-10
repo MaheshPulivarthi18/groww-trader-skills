@@ -25,6 +25,7 @@ Inspired by the design of [day-trader-skill](https://github.com/jakeschincariol/
 | `groww-backtest` | replay one rule over past sessions after slippage and charges | `trader/backtest.json` |
 | `groww-sweep` | try many intraday rule variations; choose on older data, judge on newer unseen data | `trader/sweep.json` |
 | `groww-swing` | the same honest search for multi-day (delivery) breakout rules on daily candles | `trader/swing.json` |
+| `groww-portfolio` | multi-stock strategies (momentum + regime filter, low volatility, dual momentum), monthly rebalance, vs holding the Nifty ETF | `trader/portfolio.json` |
 | `groww-paper` | run the whole pipeline on live data and record simulated trades; never sends orders | `trader/journal.json` |
 | `groww-review` | answer questions and build dashboards from the optional MongoDB mirror | reads only |
 
@@ -115,6 +116,21 @@ python3 gtrade.py swing --lookbacks 20 --stops pct:5 --targets 3R --holds 20 --t
 
 Rule: close above the highest high of the last N days (optionally only above an N-day average), buy next day's open; exit at the stop, the target, or after the holding period.
 
+## Portfolio strategies: momentum, low volatility, dual momentum
+
+The slower, multi-stock approaches with the most research behind them: rank a universe, hold the best handful, rebalance monthly, and compare with simply holding the index.
+
+```
+python3 gtrade.py fetch --universe nifty100 NIFTYBEES GOLDBEES --interval 1440 --days 2500
+python3 gtrade.py portfolio --universe nifty100 --source csv                   # 12-1 momentum, top 10
+python3 gtrade.py portfolio --universe nifty100 --regime cash --source csv     # cash when the index trends down
+python3 gtrade.py portfolio --universe nifty100 --sweep --source csv           # 24 variations, train/test
+python3 gtrade.py portfolio --strategy lowvol --universe nifty100 --source csv
+python3 gtrade.py portfolio --strategy dualmom --assets NIFTYBEES,GOLDBEES --source csv
+```
+
+Orders fill at the next day's open after the decision, with delivery charges both ways and whole shares; every result is shown beside NIFTYBEES held over the same dates. Read the caveats it prints: index universes use today's members (survivorship bias flatters the past), taxes aren't modelled, and idle cash earns nothing unless you pass `--cash-yield`.
+
 ## Paper trading
 
 ```
@@ -186,7 +202,8 @@ Offline, on synthetic candles (not real market data). They pin the charge math (
 ## Roadmap
 
 - `groww-broker`: live orders via `growwapi`, only after a rule survives sweep and weeks of paper trading; risk PASS and an explicit yes per order; from a static IP registered with Groww
-- Swing paper trading (the paper engine is intraday only today)
+- Swing and portfolio paper tracking (the paper engine is intraday only today)
+- Pairs trading / statistical arbitrage (needs shorting and a stock-borrow model)
 - More setups (gap-and-go, index-relative strength)
 - `groww-news`: NSE/BSE corporate announcements for the watchlist
 

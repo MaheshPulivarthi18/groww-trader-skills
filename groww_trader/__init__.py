@@ -7,4 +7,4 @@ runs offline on cached CSV candles.
 Not financial advice. See README.md.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

@@ -12,6 +12,7 @@
   python3 gtrade.py backtest SBIN --setup orb --write   replay past sessions -> trader/backtest.json
   python3 gtrade.py sweep --source csv                  many rule variations, judged on unseen data
   python3 gtrade.py swing --source csv                  multi-day (delivery) rules on daily candles
+  python3 gtrade.py portfolio --universe nifty100       momentum / low-vol / dual momentum vs the index
   python3 gtrade.py paper run | once | report | replay  paper trading on live data (simulated fills)
   python3 gtrade.py pause | resume                      stop / allow new paper positions
   python3 gtrade.py telegram setup | test               optional Telegram alerts and commands
@@ -81,7 +82,14 @@ def cmd_ltp(args, cfg):
 def cmd_fetch(args, cfg):
     src = get_source("groww", cfg["exchange"])
     res = {}
-    for s in symbols_arg(args, cfg):
+    symbols = symbols_arg(args, cfg)
+    if args.universe:
+        from groww_trader import universe
+        symbols, _desc = universe.load(args.universe)
+        symbols += [s.upper() for s in (args.symbols or []) if s.upper() not in symbols]
+    for n, s in enumerate(symbols, 1):
+        if len(symbols) > 15:
+            print(f"[{n}/{len(symbols)}] {s}", file=sys.stderr, flush=True)
         try:
             c = get_candles(src, s, args.interval, args.days)
             p = csv_path(s, args.interval)
@@ -100,6 +108,16 @@ def cmd_fetch(args, cfg):
                 res[s]["first_failure"] = failed[0]
         except Exception as e:  # keep going across symbols
             res[s] = {"error": str(e)}
+    if len(symbols) > 15:  # summary instead of a page of JSON
+        ok = {k: v for k, v in res.items() if "error" not in v}
+        errs = {k: v["error"][:120] for k, v in res.items() if "error" in v}
+        firsts = sorted(v["first_day"] for v in ok.values() if v.get("first_day"))
+        lasts = sorted(v["last_day"] for v in ok.values() if v.get("last_day"))
+        out({"symbols": len(symbols), "fetched": len(ok), "errors": errs,
+             "earliest_first_day": firsts[0] if firsts else None, "latest_first_day": firsts[-1] if firsts else None,
+             "last_day_range": [lasts[0], lasts[-1]] if lasts else None,
+             "short_history": sorted(k for k, v in ok.items() if v.get("candles", 0) < 300)})
+        return
     out(res)
 
 
@@ -561,6 +579,92 @@ def cmd_swing(args, cfg):
         print(f"Data errors: {errors}")
 
 
+def cmd_portfolio(args, cfg):
+    from groww_trader import portfolio as pf
+    from groww_trader import universe
+
+    if args.universe:
+        uni, udesc = universe.load(args.universe)
+    else:
+        uni, udesc = [s.upper() for s in cfg["watchlist"]], f"your watchlist ({len(cfg['watchlist'])} stocks)"
+    bench = args.benchmark.upper() if args.benchmark else None
+    assets = [a.strip().upper() for a in args.assets.split(",") if a.strip()]
+    need = (assets if args.strategy == "dualmom" else uni) + ([bench] if bench else [])
+    src = get_source(args.source, cfg["exchange"])
+    data, errors = {}, {}
+    for n, s in enumerate(dict.fromkeys(need), 1):
+        if len(need) > 15 and src.name == "groww":
+            print(f"[{n}/{len(need)}] {s}", file=sys.stderr, flush=True)
+        try:
+            data[s] = get_candles(src, s, 1440, args.days)
+        except Exception as e:
+            errors[s] = str(e)[:160]
+    if bench and bench not in data:
+        sys.exit(f"error: no daily data for the benchmark {bench}. Fetch it: gtrade.py fetch {bench} "
+                 f"--interval 1440 --days {args.days}")
+    m = pf.build_market(data, bench)
+    base = {"strategy": args.strategy, "universe": [s for s in uni if s in data], "assets": assets,
+            "benchmark": bench, "lookback": args.lookback, "skip": args.skip, "top": args.top,
+            "weight": args.weight, "regime": args.regime, "sma": args.sma, "rebalance": args.rebalance,
+            "band": args.band, "cash_yield_pct": args.cash_yield, "rf_pct": args.rf}
+    capital = float(args.capital or cfg["capital"])
+    try:
+        if args.sweep:
+            res = pf.sweep(m, base, pf.grid(args.strategy), cfg, train_frac=args.train, capital=capital)
+        else:
+            res = pf.evaluate(m, base, cfg, train_frac=args.train, capital=capital)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+    res.update(universe=udesc, data_errors=errors, survivorship_note=(
+        "Uses today's index members for past years, which flatters results (survivorship bias)."
+        if args.universe and args.universe.lower().startswith("nifty") else None))
+    if args.write:
+        write_json("portfolio.json", res)
+    if args.json:
+        out(res if args.all else {k: v for k, v in res.items() if k != "all"})
+        return
+
+    pct = lambda v: "—" if v is None else f"{v:+.1f}%"
+    print(f"{args.strategy} on {udesc}, benchmark {bench or 'none'}, rebalance {args.rebalance}, "
+          f"after delivery charges and {cfg.get('slippage_pct', 0)}% slippage")
+    if args.sweep:
+        sp = res["split"]
+        print(f"Train (choose): {sp['train'][0]} to {sp['train'][1]}   Test (unseen): {sp['test'][0]} to {sp['test'][1]}")
+        print(f"{res['beat_benchmark_on_train']} of {res['variants_tested']} variations beat the benchmark on train.\n")
+        head = f"{'rule':40} {'train':>9} {'bench':>9} {'test':>9} {'bench':>9} {'test maxDD':>10}"
+        print(head + "\n" + "-" * len(head))
+        for r in res["top"]:
+            v = r["rule"]
+            name = " ".join(f"{k}={v[k]}" for k in ("lookback", "top", "regime", "weight") if k in v)
+            tr, te = r["train"], r["test"]
+            print(f"{name:40} {pct(tr['strategy']['total_return_pct']):>9} {pct(tr.get('benchmark', {}).get('total_return_pct')):>9} "
+                  f"{pct(te['strategy']['total_return_pct']):>9} {pct(te.get('benchmark', {}).get('total_return_pct')):>9} "
+                  f"{pct(te['strategy']['max_drawdown_pct']):>10}")
+        print("\n(total returns over each period, after costs)")
+    else:
+        head = f"{'period':7} {'dates':25} {'return':>8} {'CAGR':>7} {'bench':>8} {'maxDD':>7} {'Sharpe':>6} {'trades':>6} {'costs ₹':>9}"
+        print(head + "\n" + "-" * len(head))
+        for name in ("train", "test", "full"):
+            r = res[name]
+            s, b = r["strategy"], r.get("benchmark", {})
+            print(f"{name:7} {s['start'] + ' to ' + s['end']:25} {pct(s['total_return_pct']):>8} {pct(s['cagr_pct']):>7} "
+                  f"{pct(b.get('total_return_pct')):>8} {pct(s['max_drawdown_pct']):>7} "
+                  f"{(s['sharpe'] if s['sharpe'] is not None else '—'):>6} {s['trades']:>6} {s['costs']:>9.0f}")
+        held = res["full"]["last_holdings"]
+        print(f"\nHolding at the end: {', '.join(f'{k} x{v}' for k, v in held.items()) or 'cash'}")
+        tr, te = res["train"].get("excess_total_pct"), res["test"].get("excess_total_pct")
+        if tr is not None:
+            print(f"Versus the benchmark: train {pct(tr)}, test {pct(te)} (total return difference)")
+    if res.get("verdict"):
+        print(f"\nVerdict: {res['verdict']}")
+    if res.get("survivorship_note"):
+        print(f"Note: {res['survivorship_note']}")
+    if args.cash_yield == 0:
+        print("Note: idle cash earns nothing here; --cash-yield 6.5 models parking it in a liquid fund.")
+    if errors:
+        print(f"Data errors ({len(errors)}): {', '.join(list(errors)[:10])}{' ...' if len(errors) > 10 else ''}")
+
+
 def cmd_mongo(args, cfg):
     store = get_store()
     if args.action == "check":
@@ -590,6 +694,7 @@ def main(argv=None):
     p = add("fetch", cmd_fetch, symbols=True)
     p.add_argument("--interval", type=int, default=5)
     p.add_argument("--days", type=int, default=60)
+    p.add_argument("--universe", help="nifty50|nifty100|nifty200|nifty500, a file, or A,B,C; symbols given are added")
     p = sub.add_parser("inspect", help="show raw Groww candles for one symbol (debugging)")
     p.set_defaults(fn=cmd_inspect)
     p.add_argument("symbol")
@@ -663,6 +768,30 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p.add_argument("--all", action="store_true")
     p.add_argument("--write", action="store_true", help="save to trader/swing.json")
+    p = sub.add_parser("portfolio", help="multi-stock strategies (momentum, low-vol, dual momentum) vs the index")
+    p.set_defaults(fn=cmd_portfolio)
+    p.add_argument("--strategy", default="momentum", choices=["momentum", "lowvol", "dualmom"])
+    p.add_argument("--universe", help="nifty50|nifty100|nifty200|nifty500, a file, or A,B,C (default: watchlist)")
+    p.add_argument("--benchmark", default="NIFTYBEES", help="ETF to compare with and for the regime filter")
+    p.add_argument("--assets", default="NIFTYBEES,GOLDBEES", help="dualmom: assets to rotate between")
+    p.add_argument("--lookback", type=int, default=252, help="trading days for the score")
+    p.add_argument("--skip", type=int, default=21, help="momentum: skip the most recent N days")
+    p.add_argument("--top", type=int, default=10, help="how many stocks to hold")
+    p.add_argument("--weight", default="equal", choices=["equal", "invvol"])
+    p.add_argument("--regime", default="off", choices=["off", "cash"], help="cash = hold cash when the benchmark is below its average")
+    p.add_argument("--sma", type=int, default=200)
+    p.add_argument("--rebalance", default="monthly", choices=["monthly", "weekly"])
+    p.add_argument("--band", type=float, default=0.2, help="don't resize a holding for changes smaller than this")
+    p.add_argument("--cash-yield", type=float, default=0.0, help="annual %% earned on idle cash")
+    p.add_argument("--rf", type=float, default=6.5, help="risk-free %% for the Sharpe ratio")
+    p.add_argument("--capital", type=float)
+    p.add_argument("--days", type=int, default=2500, help="calendar days of daily history to use")
+    p.add_argument("--train", type=float, default=0.6)
+    p.add_argument("--sweep", action="store_true", help="try a small grid of variations, judged on unseen data")
+    p.add_argument("--source", default="auto", choices=["auto", "csv", "groww"])
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--all", action="store_true")
+    p.add_argument("--write", action="store_true", help="save to trader/portfolio.json")
     for name in ("pause", "resume"):
         p = sub.add_parser(name, help=f"{name} new paper positions (open ones are always managed)")
         p.set_defaults(fn=cmd_pause)
