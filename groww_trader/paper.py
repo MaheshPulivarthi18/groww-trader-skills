@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from .backtest import slipped, stats, walk_exit
+from .config import exit_rules
 from .costs import net_pnl
 from .market import IST, MARKET_CLOSE, MARKET_OPEN, Candle, by_session, parse_ts
 from .plan import make_plan
@@ -46,7 +47,10 @@ def _fmt(e: Dict[str, Any]) -> str:
 
 
 def step(cfg: Dict[str, Any], data: Dict[str, List[Candle]], now: datetime, journal: Journal,
-         interval_min: int) -> Tuple[Journal, List[str]]:
+         interval_min: int, paused: bool = False) -> Tuple[Journal, List[str]]:
+    """One paper-trading step. With paused=True no new position is taken
+    (new triggers are recorded as blocked, pending ideas are cancelled) but
+    open positions are still managed to their stop, target or flat-by."""
     now = now.astimezone(IST)
     day = now.date()
     events: List[str] = []
@@ -80,9 +84,14 @@ def step(cfg: Dict[str, Any], data: Dict[str, List[Candle]], now: datetime, jour
                     events.append(f"MISSED  {_fmt(base)}: triggered {sig['trigger_time'][11:16]}, too late to act")
                     known_ids.add(eid)
                     continue
+                if paused:
+                    journal.append({**base, "status": "blocked", "risk_reasons": ["paused"]})
+                    events.append(f"BLOCKED {_fmt(base)}: paused")
+                    known_ids.add(eid)
+                    continue
                 try:
                     hist = (prev or []) + [b for b in today if b.ts <= parse_ts(sig["trigger_bar"])]
-                    order = size(make_plan(sig, cfg["exit"], hist), cfg)
+                    order = size(make_plan(sig, exit_rules(cfg, setup), hist), cfg)
                 except ValueError as e:
                     journal.append({**base, "status": "blocked", "risk_reasons": [str(e)]})
                     events.append(f"BLOCKED {_fmt(base)}: {e}")
@@ -108,6 +117,10 @@ def step(cfg: Dict[str, Any], data: Dict[str, List[Candle]], now: datetime, jour
             continue
         today, _ = _sessions(data.get(e["symbol"], []), now)
         flat = parse_ts(e["flat_by"])
+        if e["status"] == "pending" and paused:
+            e["status"], e["reason"] = "cancelled", "paused before fill"
+            events.append(f"CANCEL  {_fmt(e)}: paused before fill")
+            continue
         if e["status"] == "pending":
             trig = parse_ts(e["trigger_bar"])
             nxt = next((b for b in today if b.ts > trig), None)

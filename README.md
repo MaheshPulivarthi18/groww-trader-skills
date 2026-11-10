@@ -1,11 +1,11 @@
 # Groww Trader Skills
 
-Open-source Claude skills for trading Indian markets (NSE) with **your own Groww account**: scan your watchlist for setups, plan the exit before you enter, size the position after Indian charges, check it against your own risk limits, and backtest the rule on past sessions before risking a rupee.
+Open-source Claude skills for trading Indian markets (NSE) with **your own Groww account**: scan your watchlist for setups, plan the exit before you enter, size the position after Indian charges, check it against your own risk limits, backtest and sweep rules honestly, and paper trade them on live data before risking a rupee.
 
 - **Runs on your machine, with your keys.** Nothing is hosted. The author never sees your account, keys or orders.
-- **No order placement in this version.** Every tool here is read-only or arithmetic. A future broker skill will only send an order after a risk PASS *and* you typing yes for that exact order, paper mode by default.
-- **Honest about costs.** Brokerage, STT, exchange fees, SEBI fee, stamp duty and GST are in every backtest and every ticket.
-- **Standard-library Python.** The only extra package is Groww's official SDK, for live data.
+- **No order placement in this version.** Every tool is read-only, arithmetic or simulated. A future broker skill will only send an order after a risk PASS *and* you typing yes for that exact order.
+- **Honest about costs.** Brokerage, STT, exchange fees, SEBI fee, stamp duty and GST are in every backtest, sweep and ticket. Defaults follow Groww's published pricing.
+- **Standard-library Python.** Extra packages only for what you switch on: Groww's SDK for live data, `pymongo` for the optional MongoDB mirror.
 
 Inspired by the design of [day-trader-skill](https://github.com/jakeschincariol/day-trader-skill) (MIT), rebuilt for Indian markets and Groww.
 
@@ -20,27 +20,16 @@ Inspired by the design of [day-trader-skill](https://github.com/jakeschincariol/
 | `groww-exit` | stop, target and flat-by time, decided before entry | `trader/plan.json` |
 | `groww-budget` | quantity so the loss at the stop, after charges, fits your limit | `trader/orders.json` |
 | `groww-risk` | PASS or BLOCK every ticket against your rules | `trader/orders.json` |
-| `groww-backtest` | replay the rule over past sessions after slippage and charges | `trader/backtest.json` |
+| `groww-backtest` | replay one rule over past sessions after slippage and charges | `trader/backtest.json` |
+| `groww-sweep` | try many rule variations; choose on older data, judge on newer unseen data | `trader/sweep.json` |
 | `groww-paper` | run the whole pipeline on live data and record simulated trades; never sends orders | `trader/journal.json` |
-| `groww-review` | answer questions and build dashboards from the MongoDB mirror (optional) | reads only |
-
-Each skill reads what the previous one wrote:
+| `groww-review` | answer questions and build dashboards from the optional MongoDB mirror | reads only |
 
 ```
 scanner -> exit -> budget -> risk           (one trade idea)
-backtest                                    (before you trust any rule)
+backtest, sweep                             (before you trust any rule)
 paper                                       (weeks of forward testing on live data)
 ```
-
-## Paper trading
-
-```
-python3 gtrade.py paper run          # start before 09:15, leave running; one step every 5-minute bar
-python3 gtrade.py paper report       # results so far
-python3 gtrade.py paper replay --date 2026-11-09   # rehearse a past session offline
-```
-
-Each bar it scans, plans, sizes and risk-checks new triggers, fills them at the next bar's open plus slippage, and exits on stop, target or flat-by. It uses the same exit code as the backtest, so you can compare the two directly. It only reads data, so it doesn't need a static IP. Stopping and restarting is safe; everything is in `trader/journal.json`. Run it for a few weeks before reading anything into the results, and remember real fills are usually a little worse than paper ones.
 
 ## Install
 
@@ -58,28 +47,22 @@ git clone https://github.com/MaheshPulivarthi18/groww-trader-skills.git
 cp -r groww-trader-skills/skills/* ~/.claude/skills/
 ```
 
-The skills call `gtrade.py` in the repo root, so keep the clone where it is.
+The skills call `gtrade.py` in the repo root, so keep the clone where it is. For live data you need Python 3.9+, an active Groww Trading API subscription ([groww.in/trade-api](https://groww.in/trade-api)) and `pip install growwapi pyotp`.
 
-For live data you need Python 3.9+, an active Groww Trading API subscription ([groww.in/trade-api](https://groww.in/trade-api)) and:
-
-```
-pip install growwapi        # official Groww SDK
-pip install pyotp           # only for the TOTP login flow
-```
+**Running it on a server:** see [docs/oracle-cloud.md](docs/oracle-cloud.md) for a step-by-step Oracle Cloud Always Free setup in Mumbai with a reserved IP, cron, and the pitfalls we hit.
 
 ## Credentials
 
-Environment variables only. Never put keys in files, commits or chat.
+Environment variables only. Never put keys in files, commits, chats or screenshots.
 
 ```
-export GROWW_TOTP_TOKEN=...  GROWW_TOTP_SECRET=...            # TOTP flow (best for a server), or
-export GROWW_API_KEY=...     GROWW_API_SECRET=...             # key + secret flow (daily approval), or
-export GROWW_ACCESS_TOKEN=...                                 # a ready token (expires daily)
+export GROWW_TOTP_TOKEN='...'  GROWW_TOTP_SECRET='...'      # TOTP flow (best for a server), or
+export GROWW_API_KEY='...'     GROWW_API_SECRET='...'       # key + secret flow (daily approval), or
+export GROWW_ACCESS_TOKEN='...'                             # a ready token (expires daily)
+export GTRADE_HOME="$HOME/trading/trader"                   # where config, data and journal live
 ```
 
-For TOTP: on Groww's API Keys page, open the dropdown next to **Generate API Key**, choose **TOTP**, and copy both the **TOTP token** (long) and the **TOTP secret** (letters A–Z and digits 2–7). Spaces in the secret are fine; they're removed.
-
-Without credentials, everything runs offline on cached candles in `trader/data/`.
+For TOTP: on Groww's API Keys page, open the dropdown next to **Generate API Key**, choose **TOTP**, and copy the **TOTP token** (long) and the **TOTP secret** (letters A–Z and digits 2–7 only). If what Groww shows as the secret has lowercase letters or symbols, scan the QR code with your phone camera and use the part after `secret=`. Without credentials, everything runs offline on cached candles in `trader/data/`.
 
 ## Quick start
 
@@ -87,21 +70,51 @@ Without credentials, everything runs offline on cached candles in `trader/data/`
 mkdir -p trader && cp config.example.json trader/config.json    # then edit YOUR limits
 python3 gtrade.py check                                         # read-only credential test
 python3 gtrade.py fetch --days 60                               # cache 5-min candles for the watchlist
-python3 gtrade.py backtest SBIN --setup orb                     # how did the rule do, after costs?
-python3 gtrade.py scan --write                                  # what is setting up right now
-python3 gtrade.py plan --write
-python3 gtrade.py size --write
-python3 gtrade.py risk --write
+python3 gtrade.py backtest SBIN --setup orb --source csv        # how did one rule do, after costs?
+python3 gtrade.py sweep --source csv                            # many rules, judged on unseen data
+python3 gtrade.py scan --write && python3 gtrade.py plan --write
+python3 gtrade.py size --write && python3 gtrade.py risk --write
 python3 gtrade.py show                                          # tickets in plain words
 ```
 
-Example ticket (from the synthetic test data, with the default config):
+Example ticket (synthetic test data, default config):
 
 ```
 [PASS] [PAPER] Buy 246 DEMO (MIS) at about ₹101.6
     stop ₹100.5  target ₹103.25  flat by 15:10 IST
-    if stopped: ₹-308.66   if target: ₹367.24   (charges ~₹38.66)
+    if stopped: ₹-326.59   if target: ₹349.72   (charges ~₹56.18)
 ```
+
+## Sweep: searching for rules without fooling yourself
+
+Trying 50 variations and keeping the best one almost always finds something that looked good by luck. `sweep` splits history by date, **chooses on the earlier ~60% and reports the later ~40%** that played no part in the choice:
+
+```
+python3 gtrade.py sweep --setups orb --targets 1.5R,2R,3R --ranges 15,30 --source csv
+```
+
+It prints how many variations were tried, how many made money on the train period, the top five with their unseen-period results beside them, and a plain verdict. Judge by the test column.
+
+## Paper trading
+
+```
+python3 gtrade.py paper run          # start before 09:15, leave running; one step every 5-minute bar
+python3 gtrade.py paper report       # results so far
+python3 gtrade.py paper replay --date 2026-11-09   # rehearse a past session offline
+python3 gtrade.py pause | resume     # stop / allow NEW positions; open ones are always managed
+```
+
+Each bar it scans, plans, sizes and risk-checks new triggers, fills them at the next bar's open plus slippage, and exits on stop, target or flat-by, with the same code as the backtest so the two compare directly. It only reads data, so it doesn't need a static IP. After the first step it fetches only today's new bars. Stopping and restarting is safe: everything is in `trader/journal.json`. Run it for a few weeks before reading anything into the results; real fills are usually a little worse than paper ones.
+
+## Optional: Telegram alerts and remote pause
+
+Your own bot sends signals, fills, exits, blocked ideas, data errors and a closing summary, and accepts `/status`, `/report`, `/pause`, `/resume`, `/help`, only from your chat.
+
+1. In Telegram, message **@BotFather** → `/newbot` → copy the token.
+2. `export TELEGRAM_BOT_TOKEN='...'` in your env file, send your bot any message, then run `python3 gtrade.py telegram setup` to see your chat id.
+3. `export TELEGRAM_CHAT_ID='...'`, then `python3 gtrade.py telegram test`.
+
+`/pause` blocks new positions and cancels unfilled ones; open positions still run to their stop, target or flat-by. Commands are answered within about 20 seconds while `paper run` is running. Telegram problems never stop the bot.
 
 ## Optional: MongoDB mirror
 
@@ -115,17 +128,17 @@ python3 gtrade.py mongo check     # ping and collection counts
 python3 gtrade.py mongo sync      # push the existing local journal once
 ```
 
-After that, `paper run` / `paper once` sync every bar and `backtest --write` saves the run. The local `trader/` files stay the source of truth: MongoDB gets a best-effort copy with short timeouts, and if it's unreachable the bot prints one warning and carries on trading. Use a database user limited to `readWrite` on this one database, and in Atlas allow only your server's IP.
+After that, `paper run` / `paper once` sync every bar and `backtest --write` saves the run. The local `trader/` files stay the source of truth: MongoDB gets a best-effort copy with short timeouts, and if it's unreachable the bot prints one warning and carries on. Use a database user limited to `readWrite` on this one database, allow only your server's IP in Atlas, and if you connect Claude, enable AI client access in Atlas under **Organization Settings → App Connections**.
 
 ## Config
 
-`trader/config.json` overrides `config.example.json`'s defaults. Key parts:
+`trader/config.json` overrides the defaults in `config.example.json`.
 
 - `capital`, `watchlist`, `product` (`MIS` intraday / `CNC` delivery), `allow_short` (off by default)
-- `setups.orb`: `range_min` (opening-range length), min/max range %
-- `exit`: `stop` (`or_mid`, `or_low`, `level`, `pct:0.8`, `atr:1.5`), `target` (`1.5R`), `flat_by` (keep this before Groww's intraday auto square-off)
-- `risk`: max loss per trade, daily loss limit, trades per day, open positions, min reward:risk, max position %, entry window
-- `charges`: percentage rates. **Defaults are typical NSE equity rates, not a quote. Match them to your broker's pricing page.** DP charges and API subscription fees are not included.
+- `setups`: **only the setups you list run**, each filled in from its defaults. A setup can carry its own `exit` block, e.g. `"pdh_breakout": {"exit": {"stop": "level"}}` (that one is the default), so ORB and PDH can run together with suitable stops.
+- `exit`: global `stop` (`or_mid`, `or_low`, `level`, `pct:0.8`, `atr:1.5`), `target` (`1.5R`), `flat_by` (keep this before Groww's intraday auto square-off)
+- `risk`: max loss per trade, daily loss limit, trades per day, open positions, **one position per stock**, min reward:risk, max position %, entry window
+- `charges`: percentage rates following [Groww's pricing](https://groww.in/pricing/stocks) as of Nov 2026 (brokerage 0.1% capped at ₹20 per order, min ₹5). Re-check them. DP charges and API subscription fees are not included.
 
 ## Backtest fill model
 
@@ -137,22 +150,21 @@ Conservative on purpose: entry at the next bar's open plus slippage; if a bar to
 python3 -m unittest discover -s tests -v
 ```
 
-Offline, on synthetic candles (not real market data). They pin the charge math, setup triggers, sizing, the risk gate, the backtest fill model, paper trading (no peeking at unfinished bars, restart-safe, identical results to the backtest) and the full CLI pipeline.
+Offline, on synthetic candles (not real market data). They pin the charge math, setup triggers, per-setup exits, sizing, the risk gate, the backtest fill model, the sweep's train/test separation, paper trading (no peeking at unfinished bars, restart-safe, identical to the backtest, pause behaviour), Telegram command handling and the MongoDB mirror's failure path.
 
 ## Fine print
 
-- **Regulation.** SEBI's retail algo framework (in force from April 2026) applies to API trading through brokers: things like static IP, 2FA, order-rate limits and strategy registration above certain thresholds. You are responsible for meeting your broker's requirements. Check Groww's API documentation and current SEBI circulars.
-- **Personal use.** This is a toolkit for running on your own account. Don't use it to trade other people's accounts or to sell signals; that needs registrations this project doesn't have.
+- **Regulation.** SEBI's retail algo framework applies to API trading through brokers: orders must come from a static IP registered with your broker (Groww's deadline was 31 March 2026), plus 2FA, order-rate limits and strategy registration above certain thresholds. This project doesn't place orders yet; when it does, meeting your broker's requirements is your responsibility. Check Groww's API documentation and current SEBI/NSE circulars.
+- **Personal use.** A toolkit for your own account. Don't use it to trade other people's accounts or to sell signals; that needs registrations this project doesn't have.
 - **Data.** 5-minute candles, not ticks. Exchange holidays aren't modelled (Groww just returns no candles). Check anything that matters in the Groww app.
 - **A stop is a plan, not a guarantee.** Fast markets and gaps fill worse than the stop.
 - **Taxes.** Intraday profits are generally treated as speculative business income in India. Nothing here is tax advice.
 
 ## Roadmap
 
-- `groww-broker`: live orders via `growwapi` only after risk PASS and an explicit yes per order, from a static IP registered with Groww
-- `groww-alerts`: stop, target and flat-by reminders
+- `groww-broker`: live orders via `growwapi`, only after a rule survives sweep and weeks of paper trading; risk PASS and an explicit yes per order; from a static IP registered with Groww
+- More setups (VWAP reclaim, gap-and-go) and delivery (CNC) swing backtests
 - `groww-news`: NSE/BSE corporate announcements for the watchlist
-- More setups (VWAP reclaim, gap-and-go), delivery (CNC) swing backtests
 
 Contributions welcome. Keep the rules: no order without a PASS and a yes, paper by default, keys out of code.
 

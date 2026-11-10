@@ -21,6 +21,7 @@ python3 <repo>/gtrade.py show                # tickets in plain words
 - loss at stop (incl. charges) within `max_loss_per_trade`
 - today's realised loss plus this trade's possible loss within `daily_loss_limit`
 - trades today below `max_trades_per_day`; open positions below `max_open_positions`
+- not already holding (or about to hold) the same stock: one position per stock
 - reward:risk at least `min_reward_risk`
 - position value within `max_position_pct` of capital
 - no shorts unless `allow_short`

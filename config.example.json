@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to trader/config.json and set YOUR limits. Rupees unless noted. Charges are default NSE equity rates: check your broker's pricing page.",
+  "_comment": "Copy to trader/config.json and set YOUR limits. Rupees unless noted. Charges match Groww's published equity pricing (groww.in/pricing/stocks) as of Nov 2026: re-check before relying on them.",
   "paper": true,
   "capital": 100000,
   "watchlist": ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN"],
@@ -27,16 +27,16 @@
     "no_entry_after": "14:30"
   },
   "charges": {
-    "brokerage_pct": 0.05,
+    "brokerage_pct": 0.1,
     "brokerage_min": 5,
     "brokerage_max": 20,
-    "exchange_txn_pct": 0.00297,
+    "exchange_txn_pct": 0.00307,
     "sebi_pct": 0.0001,
     "gst_pct": 18,
     "intraday": {"stt_sell_pct": 0.025, "stt_buy_pct": 0.0, "stamp_buy_pct": 0.003},
     "delivery": {"stt_sell_pct": 0.1, "stt_buy_pct": 0.1, "stamp_buy_pct": 0.015}
   },
-  "slippage_pct": 0.02,
+  "slippage_pct": 0.03,
   "paper_trading": {
     "max_signal_age_min": 10
   }

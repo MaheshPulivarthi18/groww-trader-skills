@@ -35,15 +35,15 @@ def cfg():
 class Costs(unittest.TestCase):
     def test_intraday_round_trip(self):
         c = round_trip(1000, 1010, 100, cfg()["charges"], "MIS")
-        self.assertEqual(c["brokerage"], 40.0)   # 0.05% capped at ₹20 per order
+        self.assertEqual(c["brokerage"], 40.0)   # 0.1% capped at ₹20 per order
         self.assertEqual(c["stt"], 25.25)        # 0.025% of sell value
         self.assertEqual(c["stamp"], 3.0)        # 0.003% of buy value
-        self.assertAlmostEqual(c["total"], 82.73, places=2)
+        self.assertAlmostEqual(c["total"], 82.97, places=2)
 
     def test_short_pnl_symmetry(self):
         p = net_pnl("SELL", 1010, 1000, 100, cfg()["charges"], "MIS")
         self.assertEqual(p["gross"], 1000.0)
-        self.assertAlmostEqual(p["net"], 1000 - 82.73, places=2)
+        self.assertAlmostEqual(p["net"], 1000 - 82.97, places=2)
 
 
 class Setups(unittest.TestCase):
@@ -132,7 +132,7 @@ class Backtest(unittest.TestCase):
         res = bt.run("TEST", prev + orb_day(DAY), "orb", c, 5)
         t = [x for x in res["trades"] if x["day"] == str(DAY)][0]
         self.assertEqual(t["exit_reason"], "target")
-        self.assertEqual(t["fill_exit"], round(103.25 * (1 - 0.0002), 2))
+        self.assertEqual(t["fill_exit"], round(103.25 * (1 - 0.0003), 2))
         self.assertGreater(t["net"], 0)
 
     def test_random_history_stats_consistent(self):
@@ -223,3 +223,41 @@ class CLI(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SetupConfig(unittest.TestCase):
+    def test_user_setups_replace_defaults_and_per_setup_exit(self):
+        from groww_trader.config import exit_rules, override_exit, setup_params
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp, "config.json")
+            p.write_text(json.dumps({"setups": {"orb": {"range_min": 30}}, "exit": {"target": "2R"}}))
+            c = load_config(p)
+        self.assertEqual(list(c["setups"]), ["orb"])               # pdh not silently added
+        self.assertEqual(c["setups"]["orb"]["max_range_pct"], 3.0)  # filled from defaults
+        self.assertEqual(c["setups"]["orb"]["range_min"], 30)
+        self.assertEqual(exit_rules(c, "orb")["stop"], "or_mid")
+        self.assertEqual(exit_rules(c, "pdh_breakout")["stop"], "level")  # default for pdh
+        self.assertEqual(exit_rules(c, "pdh_breakout")["target"], "2R")   # global still applies
+        self.assertEqual(setup_params(c, "pdh_breakout"), {"exit": {"stop": "level"}})
+        override_exit(c, "pdh_breakout", stop="pct:1")
+        self.assertEqual(exit_rules(c, "pdh_breakout")["stop"], "pct:1")  # CLI wins
+
+    def test_both_setups_backtest_with_their_own_stops(self):
+        c = cfg()
+        prev = [Candle(b.ts - timedelta(days=1), 100, 101.2, 99.5, 100.4) for b in orb_day(DAY)]
+        res = bt.run("TEST", prev + orb_day(DAY), "pdh_breakout", c, 5)
+        t = [x for x in res["trades"] if x["day"] == str(DAY)][0]
+        self.assertEqual(t["stop"], 101.2)  # stopped at the broken level, not an ORB rule
+
+
+class OnePerStock(unittest.TestCase):
+    def test_second_position_in_same_stock_blocked(self):
+        c = cfg()
+        c["risk"]["max_open_positions"] = 5
+        sig = detect("orb", "TEST", orb_day(DAY), c, 5)
+        o = size(make_plan(sig, c["exit"]), c)
+        res = check([o, {**o, "setup": "pdh_breakout"}], c, [], now=None)
+        self.assertEqual([r["risk_check"] for r in res], ["PASS", "BLOCK"])
+        self.assertIn("already holding TEST (one position per stock)", res[1]["risk_reasons"])
+        j = [{"day": str(DAY), "symbol": "TEST", "status": "open"}]
+        self.assertEqual(check([o], c, j, now=None)[0]["risk_check"], "BLOCK")

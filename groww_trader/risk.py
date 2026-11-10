@@ -45,6 +45,11 @@ def check(orders: List[Dict[str, Any]], cfg: Dict[str, Any], journal: Optional[L
             why.append(f"already {trades} trade(s) today, limit {r['max_trades_per_day']}")
         if open_pos >= r["max_open_positions"]:
             why.append(f"{open_pos} position(s) open, limit {r['max_open_positions']}")
+        sym = o.get("symbol")
+        if sym and (any(j.get("symbol") == sym and j.get("status") in ("pending", "open") for j in today)
+                    or any(x.get("symbol") == sym and x["risk_check"] == "PASS" and x.get("day") == day
+                           for x in out)):
+            why.append(f"already holding {sym} (one position per stock)")
         if float(o.get("reward_risk", 0)) < r["min_reward_risk"]:
             why.append(f"reward:risk {o.get('reward_risk')} below {r['min_reward_risk']}")
         if o.get("value", 0) > cfg["capital"] * r["max_position_pct"] / 100 + 0.01:

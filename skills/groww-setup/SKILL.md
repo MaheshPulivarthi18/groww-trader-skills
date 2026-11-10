@@ -9,7 +9,7 @@ Gets one person running these tools against **their own** Groww account. Nothing
 
 ## Where things are
 
-`gtrade.py` is in the repository root, two folders above this SKILL.md (`<repo>/gtrade.py`). Run every command from the user's project folder so files land in its `trader/` folder:
+`gtrade.py` is in the repository root, two folders above this SKILL.md (`<repo>/gtrade.py`). Files land in `trader/` under the current folder, or wherever `GTRADE_HOME` points (recommended on a server: `export GTRADE_HOME="$HOME/trading/trader"`, so commands work from any folder):
 
 ```
 python3 <repo>/gtrade.py <command>
@@ -31,9 +31,16 @@ python3 <repo>/gtrade.py <command>
 
 4. **Config.** Copy `<repo>/config.example.json` to `trader/config.json` and fill it in **with the user**. Ask for their capital, max loss per trade, daily loss limit, trades per day and watchlist. Don't invent limits for them; if they have no idea, start from the example's conservative values and say so. Keep `"paper": true`.
 
-5. **Charges.** The `charges` block holds default NSE equity rates. Ask the user to check their current Groww pricing page and adjust. Backtest results are only as honest as these numbers.
+5. **Charges.** The `charges` block follows Groww's published equity pricing (brokerage 0.1% capped at Rs 20 per order, min Rs 5; checked Nov 2026). Ask the user to confirm against groww.in/pricing/stocks. Backtest results are only as honest as these numbers.
 
 6. **Verify (read-only):** `python3 <repo>/gtrade.py check` prints the last price of the first watchlist symbol. Then `gtrade.py fetch --days 60` caches 5-minute candles for the watchlist in `trader/data/`.
+
+7. **Optional extras**, only if the user wants them:
+   - A server that runs every market day: walk them through `<repo>/docs/oracle-cloud.md` (Oracle Always Free, reserved IP, cron).
+   - Telegram alerts and `/pause`: `TELEGRAM_BOT_TOKEN`, then `gtrade.py telegram setup` to find `TELEGRAM_CHAT_ID`, then `gtrade.py telegram test`.
+   - MongoDB mirror for dashboards and `groww-review`: `pip install pymongo`, `GTRADE_MONGO_URI`, `GTRADE_MONGO_DB`, then `gtrade.py mongo check`. Use a DB user limited to `readWrite` on that database and allow only the server's IP.
+
+   Env file rules: no spaces around `=`, single quotes around values, `chmod 600`. Never ask for or accept the values in chat.
 
 ## Rules to repeat to the user
 

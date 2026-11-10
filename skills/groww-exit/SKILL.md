@@ -26,6 +26,8 @@ python3 <repo>/gtrade.py plan --symbol SBIN --stop or_low --target 2R --write
 
 Target is a multiple of the risk: `1.5R` means 1.5 x (entry - stop). Prices round to a 0.05 tick.
 
+Each setup can have its own rules: `setups.<name>.exit` in the config overrides the global `exit` block for that setup (by default `pdh_breakout` uses `level`). `--stop` / `--target` on the command line override both.
+
 ## Flat-by
 
 `exit.flat_by` (default 15:10 IST). Groww auto squares off intraday (MIS) positions in the afternoon and may charge for it; the user should check Groww's current cut-off and keep `flat_by` comfortably before it.

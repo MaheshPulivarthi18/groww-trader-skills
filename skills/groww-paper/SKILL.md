@@ -17,6 +17,8 @@ python3 <repo>/gtrade.py paper once                    # a single step now
 python3 <repo>/gtrade.py paper report                  # results across all paper days
 python3 <repo>/gtrade.py paper report --date 2026-11-10
 python3 <repo>/gtrade.py paper replay --date 2026-11-09 --write   # rehearse a past day
+python3 <repo>/gtrade.py pause                         # no NEW positions (open ones still managed)
+python3 <repo>/gtrade.py resume
 ```
 
 `run` prints one line per event and a status line per bar. It's safe to stop (Ctrl+C) and restart: all state is in `trader/journal.json`. `run` blocks until the close, so tell the user to start it in their own terminal or on a server rather than running it inside a chat turn. Use `once` and `report` from chat.
@@ -27,7 +29,15 @@ python3 <repo>/gtrade.py paper replay --date 2026-11-09 --write   # rehearse a p
 2. **Fill** a pending idea at the open of the bar after the trigger bar, plus slippage.
 3. **Manage** open positions: stop, target or flat-by, judged only on bars that have closed. The rules are identical to the backtest's (shared code).
 
-Journal statuses: `pending`, `open`, `closed`, `blocked` (risk gate said no, reasons kept), `missed` (trigger older than `paper_trading.max_signal_age_min` when first seen, e.g. the user started late), `cancelled` (no fill before flat-by). Only pending/open/closed count toward daily limits.
+Journal statuses: `pending`, `open`, `closed`, `blocked` (risk gate said no, or paused; reasons kept), `missed` (trigger older than `paper_trading.max_signal_age_min` when first seen, e.g. the user started late), `cancelled` (no fill before flat-by, or paused before the fill). Only pending/open/closed count toward daily limits.
+
+## Pause and alerts
+
+- **Pause** (`gtrade.py pause`, or `/pause` in Telegram) is a file, `trader/PAUSED`. While it exists, new triggers are recorded as blocked with reason `paused`, unfilled ideas are cancelled, and open positions still run to their stop, target or flat-by. If the user asks to stop the bot taking trades, pausing is the safe first step.
+- **Telegram** (optional, `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`): alerts for signals, fills, exits, blocks, data errors and a closing summary; commands `/status`, `/report`, `/pause`, `/resume`, `/help`, accepted only from the owner's chat. Setup: `gtrade.py telegram setup`, then `gtrade.py telegram test`.
+- **MongoDB** (optional, `GTRADE_MONGO_URI`): each step is mirrored for `groww-review`.
+
+None of these can stop or slow the trading loop: they're best-effort with short timeouts.
 
 ## How to report
 

@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from datetime import datetime, timedelta
 
+from .config import exit_rules
 from .costs import net_pnl
 from .market import Candle, by_session, parse_ts
 from .plan import make_plan
@@ -79,7 +80,11 @@ def _simulate(order: Dict[str, Any], bars: List[Candle], start_idx: int, slip: f
             "exit_reason": reason, "exit_time": ts.isoformat()}
 
 
-def run(symbol: str, candles: List[Candle], setup: str, cfg: Dict[str, Any], interval_min: int) -> Dict[str, Any]:
+def run(symbol: str, candles: List[Candle], setup: str, cfg: Dict[str, Any], interval_min: int,
+        from_day=None, to_day=None) -> Dict[str, Any]:
+    """Backtest every session in `candles`. With from_day/to_day only
+    sessions in that range are traded; earlier sessions still serve as the
+    'previous day' for setups that need one."""
     sessions = by_session(candles)
     days = sorted(sessions)
     slip = cfg.get("slippage_pct", 0.0) / 100
@@ -87,7 +92,11 @@ def run(symbol: str, candles: List[Candle], setup: str, cfg: Dict[str, Any], int
     trades: List[Dict[str, Any]] = []
     status_counts: Dict[str, int] = {}
 
+    traded_days = 0
     for i, day in enumerate(days):
+        if (from_day and day < from_day) or (to_day and day > to_day):
+            continue
+        traded_days += 1
         bars = sessions[day]
         prev = sessions[days[i - 1]] if i > 0 else None
         sig = detect(setup, symbol, bars, cfg, interval_min, at=None, prev_bars=prev)
@@ -99,7 +108,7 @@ def run(symbol: str, candles: List[Candle], setup: str, cfg: Dict[str, Any], int
         idx = next(k for k, b in enumerate(bars) if b.ts == trig_ts)
         history = (prev or []) + bars[: idx + 1]
         try:
-            plan = make_plan(sig, cfg["exit"], history)
+            plan = make_plan(sig, exit_rules(cfg, setup), history)
         except ValueError as e:
             status_counts["plan_error"] = status_counts.get("plan_error", 0) + 1
             sig["reason"] = str(e)
@@ -118,7 +127,7 @@ def run(symbol: str, candles: List[Candle], setup: str, cfg: Dict[str, Any], int
                        "entry": order["entry"], "stop": order["stop"], "target": order["target"],
                        **sim, **pnl, "r": round(pnl["net"] / planned_risk, 2) if planned_risk else 0})
     return {"symbol": symbol, "setup": setup, "interval_min": interval_min,
-            "sessions": len(days), "not_triggered": status_counts,
+            "sessions": traded_days, "not_triggered": status_counts,
             "trades": trades, "stats": stats(trades)}
 
 

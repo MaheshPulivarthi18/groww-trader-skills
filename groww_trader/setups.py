@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from .config import setup_params
 from .market import IST, MARKET_OPEN, Candle, bar_end, parse_hhmm
 
 SETUPS = ("orb", "pdh_breakout")
@@ -48,7 +49,7 @@ def _first_break(bars: List[Candle], interval_min: int, up: float, down: float,
 
 def orb(symbol: str, bars: List[Candle], cfg: Dict[str, Any], interval_min: int,
         at: Optional[datetime] = None, prev_bars: Optional[List[Candle]] = None) -> Dict[str, Any]:
-    p = cfg["setups"]["orb"]
+    p = setup_params(cfg, "orb")
     if not bars:
         return {"symbol": symbol, "setup": "orb", "status": "no_data"}
     day = bars[0].day

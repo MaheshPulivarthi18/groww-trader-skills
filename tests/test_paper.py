@@ -127,3 +127,35 @@ class PaperCLI(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IncrementalFetch(unittest.TestCase):
+    def test_second_step_fetches_only_today(self):
+        import gtrade
+
+        class FakeGroww:
+            name = "groww"
+
+            def __init__(self):
+                self.calls = []
+
+            def candles(self, symbol, interval, start, end):
+                self.calls.append((start, end))
+                return [c for c in history() if start <= c.ts <= end]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["GTRADE_HOME"] = tmp
+            gtrade._LIVE.clear()
+            try:
+                src = FakeGroww()
+                d1, e1 = gtrade._paper_data(src, ["TEST"], 5)
+                d2, e2 = gtrade._paper_data(src, ["TEST"], 5)
+                self.assertEqual((e1, e2), ({}, {}))
+                (s1, _), (s2, _) = src.calls
+                self.assertGreaterEqual((s2 - s1).days, 6)         # 2nd call: today only
+                self.assertEqual(s2.strftime("%H:%M"), "09:00")
+                self.assertEqual(len(d2["TEST"]), len(d1["TEST"]))  # merged, no duplicates
+                self.assertTrue(csv_path("TEST", 5).exists())
+            finally:
+                gtrade._LIVE.clear()
+                os.environ.pop("GTRADE_HOME", None)
