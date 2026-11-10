@@ -150,6 +150,19 @@ class Backtest(unittest.TestCase):
         self.assertEqual(out1, bt.bootstrap(res["trades"]))  # seeded, repeatable
 
 
+class Credentials(unittest.TestCase):
+    def test_totp_secret_cleanup_and_errors(self):
+        from groww_trader.data import normalize_totp_secret
+        self.assertEqual(normalize_totp_secret(" jbsw y3dp-ehpk 3pxp "), "JBSWY3DPEHPK3PXP")
+        self.assertEqual(normalize_totp_secret("JBSWY3DPEHPK3PX"), "JBSWY3DPEHPK3PX=")
+        with self.assertRaises(RuntimeError) as e:
+            normalize_totp_secret("paste_totp_secret_here")
+        self.assertIn("swap", str(e.exception))
+        self.assertNotIn("PASTE", str(e.exception))  # never echo the secret
+        with self.assertRaises(RuntimeError):
+            normalize_totp_secret("eyJhbGciOi.J9.x1")
+
+
 class Indicators(unittest.TestCase):
     def test_rsi_extremes(self):
         self.assertEqual(rsi(list(range(1, 30)))[-1], 100.0)
@@ -161,7 +174,7 @@ class CLI(unittest.TestCase):
         import gtrade
         with tempfile.TemporaryDirectory() as tmp:
             os.environ["GTRADE_HOME"] = tmp
-            for k in ("GROWW_ACCESS_TOKEN", "GROWW_API_KEY"):
+            for k in ("GROWW_ACCESS_TOKEN", "GROWW_API_KEY", "GROWW_TOTP_TOKEN", "GROWW_TOTP_SECRET"):
                 os.environ.pop(k, None)
             try:
                 bars = random_days(DAY - timedelta(days=1), 1, seed=3, price=100) + orb_day(DAY)

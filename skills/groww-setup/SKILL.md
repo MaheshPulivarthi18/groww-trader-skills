@@ -23,9 +23,11 @@ python3 <repo>/gtrade.py <command>
 2. **Groww API subscription.** The user needs an active Trading API subscription and keys from groww.in/trade-api. Point them there; do not do it for them.
 
 3. **Credentials go in environment variables, never in files or the chat.** If the user pastes a key or secret into the chat, tell them to revoke it on Groww and make a new one. One of:
-   - `GROWW_ACCESS_TOKEN`
+   - `GROWW_TOTP_TOKEN` + `GROWW_TOTP_SECRET` (TOTP flow; best for a server. On Groww's API Keys page: dropdown next to "Generate API Key" -> TOTP. The token is long; the secret is only A-Z and 2-7.)
    - `GROWW_API_KEY` + `GROWW_API_SECRET` (key/secret flow; Groww asks for a daily approval)
-   - `GROWW_API_KEY` + `GROWW_TOTP_SECRET` (TOTP flow)
+   - `GROWW_ACCESS_TOKEN` (expires daily)
+
+   If `check` says the TOTP secret is invalid, the token and secret are usually swapped, or a placeholder was left in.
 
 4. **Config.** Copy `<repo>/config.example.json` to `trader/config.json` and fill it in **with the user**. Ask for their capital, max loss per trade, daily loss limit, trades per day and watchlist. Don't invent limits for them; if they have no idea, start from the example's conservative values and say so. Keep `"paper": true`.
 

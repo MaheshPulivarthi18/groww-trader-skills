@@ -105,7 +105,7 @@ class PaperCLI(unittest.TestCase):
         import gtrade
         with tempfile.TemporaryDirectory() as tmp:
             os.environ["GTRADE_HOME"] = tmp
-            for k in ("GROWW_ACCESS_TOKEN", "GROWW_API_KEY"):
+            for k in ("GROWW_ACCESS_TOKEN", "GROWW_API_KEY", "GROWW_TOTP_TOKEN", "GROWW_TOTP_SECRET"):
                 os.environ.pop(k, None)
             try:
                 save_csv(history(), csv_path("TEST", 5))

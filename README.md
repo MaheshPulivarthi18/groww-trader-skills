@@ -71,10 +71,12 @@ pip install pyotp           # only for the TOTP login flow
 Environment variables only. Never put keys in files, commits or chat.
 
 ```
-export GROWW_ACCESS_TOKEN=...                                 # or
-export GROWW_API_KEY=...  GROWW_API_SECRET=...                # key + secret flow, or
-export GROWW_API_KEY=...  GROWW_TOTP_SECRET=...               # TOTP flow
+export GROWW_TOTP_TOKEN=...  GROWW_TOTP_SECRET=...            # TOTP flow (best for a server), or
+export GROWW_API_KEY=...     GROWW_API_SECRET=...             # key + secret flow (daily approval), or
+export GROWW_ACCESS_TOKEN=...                                 # a ready token (expires daily)
 ```
+
+For TOTP: on Groww's API Keys page, open the dropdown next to **Generate API Key**, choose **TOTP**, and copy both the **TOTP token** (long) and the **TOTP secret** (letters A–Z and digits 2–7). Spaces in the secret are fine; they're removed.
 
 Without credentials, everything runs offline on cached candles in `trader/data/`.
 

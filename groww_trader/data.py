@@ -6,9 +6,9 @@ CSVSource    - cached candles in trader/data/<SYMBOL>_<interval>m.csv, so
                scanning and backtesting work offline and are repeatable.
 
 Credentials (environment variables, never files or chat):
-  GROWW_ACCESS_TOKEN                      a ready access token, or
+  GROWW_TOTP_TOKEN + GROWW_TOTP_SECRET    TOTP flow, best for unattended use (needs pyotp)
   GROWW_API_KEY + GROWW_API_SECRET        key/secret flow (needs daily approval), or
-  GROWW_API_KEY + GROWW_TOTP_SECRET       TOTP flow (needs `pip install pyotp`)
+  GROWW_ACCESS_TOKEN                      a ready access token (expires daily)
 """
 
 from __future__ import annotations
@@ -118,21 +118,24 @@ class GrowwSource:
 
     @staticmethod
     def _access_token(GrowwAPI) -> str:  # pragma: no cover - needs real credentials
-        tok = os.environ.get("GROWW_ACCESS_TOKEN")
+        tok = os.environ.get("GROWW_ACCESS_TOKEN", "").strip()
         if tok:
             return tok
-        key = os.environ.get("GROWW_API_KEY")
-        if not key:
-            raise RuntimeError(
-                "No Groww credentials. Set GROWW_ACCESS_TOKEN, or GROWW_API_KEY with "
-                "GROWW_API_SECRET or GROWW_TOTP_SECRET, as environment variables.")
-        if os.environ.get("GROWW_API_SECRET"):
-            return GrowwAPI.get_access_token(api_key=key, secret=os.environ["GROWW_API_SECRET"])
-        if os.environ.get("GROWW_TOTP_SECRET"):
-            import pyotp  # type: ignore
-            totp = pyotp.TOTP(os.environ["GROWW_TOTP_SECRET"]).now()
-            return GrowwAPI.get_access_token(api_key=key, totp=totp)
-        raise RuntimeError("GROWW_API_KEY is set but neither GROWW_API_SECRET nor GROWW_TOTP_SECRET is.")
+        if os.environ.get("GROWW_TOTP_SECRET", "").strip():
+            # TOTP flow: Groww's "TOTP token" goes in as the api_key.
+            token = (os.environ.get("GROWW_TOTP_TOKEN") or os.environ.get("GROWW_API_KEY") or "").strip()
+            if not token:
+                raise RuntimeError("TOTP flow needs GROWW_TOTP_TOKEN (the 'TOTP token' Groww shows) "
+                                   "alongside GROWW_TOTP_SECRET.")
+            code = current_totp(os.environ["GROWW_TOTP_SECRET"])  # validates the secret first
+            return GrowwAPI.get_access_token(api_key=token, totp=code)
+        key = os.environ.get("GROWW_API_KEY", "").strip()
+        secret = os.environ.get("GROWW_API_SECRET", "").strip()
+        if key and secret:
+            return GrowwAPI.get_access_token(api_key=key, secret=secret)
+        raise RuntimeError(
+            "No usable Groww credentials. Set one of: GROWW_ACCESS_TOKEN; "
+            "GROWW_TOTP_TOKEN + GROWW_TOTP_SECRET; or GROWW_API_KEY + GROWW_API_SECRET.")
 
     def _interval_const(self, interval_min: int):
         name = _INTERVAL_CONSTS.get(interval_min)
@@ -178,8 +181,42 @@ class GrowwSource:
         return out
 
 
+_B32 = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+
+
+def normalize_totp_secret(raw: str) -> str:
+    """Clean a TOTP secret as copied from a website: drop spaces, dashes,
+    quotes and '=' padding, uppercase it, and check it's valid base32.
+    Errors never include the secret itself."""
+    s = "".join(ch for ch in str(raw) if ch not in " \t\r\n-'\"=").upper()
+    if not s:
+        raise RuntimeError("GROWW_TOTP_SECRET is empty.")
+    bad = sorted({ch for ch in s if ch not in _B32})
+    if bad:
+        hint = ""
+        if any(ch in "._" for ch in bad):
+            hint = (" It contains '.' or '_' , so it looks like the TOTP *token* or a placeholder, "
+                    "not the secret. Check you didn't swap GROWW_TOTP_TOKEN and GROWW_TOTP_SECRET.")
+        elif set(bad) <= set("0189"):
+            hint = " It contains 0, 1, 8 or 9, which never appear in a TOTP secret; re-copy it from Groww."
+        raise RuntimeError(f"GROWW_TOTP_SECRET is not a valid TOTP secret ({len(s)} chars, "
+                           f"{len(bad)} kind(s) of invalid character).{hint} A TOTP secret uses only "
+                           "letters A-Z and digits 2-7.")
+    return s + "=" * (-len(s) % 8)
+
+
+def current_totp(raw_secret: str) -> str:
+    secret = normalize_totp_secret(raw_secret)
+    try:
+        import pyotp  # type: ignore
+    except ImportError as e:  # pragma: no cover
+        raise RuntimeError("The TOTP flow needs pyotp: pip install pyotp") from e
+    return pyotp.TOTP(secret).now()
+
+
 def has_groww_credentials() -> bool:
-    return bool(os.environ.get("GROWW_ACCESS_TOKEN") or os.environ.get("GROWW_API_KEY"))
+    return any(os.environ.get(k, "").strip() for k in
+               ("GROWW_ACCESS_TOKEN", "GROWW_API_KEY", "GROWW_TOTP_TOKEN", "GROWW_TOTP_SECRET"))
 
 
 def get_source(kind: str = "auto", exchange: str = "NSE"):

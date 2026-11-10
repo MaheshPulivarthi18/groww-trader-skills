@@ -355,7 +355,10 @@ def main(argv=None):
 
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
-    args.fn(args, cfg)
+    try:
+        args.fn(args, cfg)
+    except RuntimeError as e:  # setup problems: show the message, not a traceback
+        sys.exit(f"error: {e}")
 
 
 if __name__ == "__main__":
