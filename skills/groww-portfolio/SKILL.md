@@ -34,6 +34,11 @@ python3 <repo>/gtrade.py portfolio --strategy dualmom --assets NIFTYBEES,GOLDBEE
 
 Decisions use closes up to the decision day; orders fill at the next day's open plus slippage; delivery charges on every buy and sell (STT both sides, stamp duty, DP charge on sells, brokerage, fees, GST); whole shares; resizing skipped for changes under `--band` (20%); final value after selling everything. Idle cash earns nothing unless `--cash-yield 6.5` (a liquid fund). The benchmark is bought once and held with the same costs.
 
+## Data corrections (automatic)
+
+- **Splits, bonuses, demergers:** Groww's daily prices aren't adjusted, so a 1:1 bonus looks like a -50% day. `portfolio` and `swing` adjust them: drops of about 29%+ that match a standard factor (1.5, 2, 3, 5, 10...) are treated as splits/bonuses; unexplained drops of about 37%+ (e.g. demergers) by the observed ratio. `gtrade.py audit --universe nifty100` lists every adjustment. A genuine crash can be mistaken for one (e.g. a -36% day snapping to a 1:2 bonus): cancel it with a line `SYMBOL,YYYY-MM-DD,1` in `trader/corporate_actions.csv`, or force a factor the same way. `--no-adjust` turns it off.
+- **Benchmark history:** Groww's NIFTYBEES history starts in January 2025. Where the ETF doesn't cover a period, results are judged against the universe's own equal-weight index (built from the data, no costs: a generous yardstick), and the regime filter uses that index too. The output says which benchmark each period used.
+
 ## How to report
 
 - Lead with the comparison to the benchmark over the same dates, in both periods. A strategy that doesn't beat simply holding NIFTYBEES isn't worth running, however good its own number looks.

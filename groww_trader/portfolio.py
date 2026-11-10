@@ -57,12 +57,17 @@ class Market:
         return list(self.c)
 
 
-def build_market(candles_by_symbol: Dict[str, List[Candle]], benchmark: Optional[str]) -> Market:
+EQW = "_EQW"  # equal-weight index of the universe, built from the data
+
+
+def build_market(candles_by_symbol: Dict[str, List[Candle]], benchmark: Optional[str] = None,
+                 ew_universe: Optional[List[str]] = None) -> Market:
+    """Calendar = every date any symbol traded. With `ew_universe`, also builds
+    `_EQW`: an index whose daily return is the average return of the
+    universe's stocks that traded on both days (no costs, rebalanced daily).
+    It stands in for the market where the benchmark ETF's history is short."""
     by_sym = {s: {c.ts.date(): c for c in cs} for s, cs in candles_by_symbol.items() if cs}
-    if benchmark and benchmark in by_sym:
-        dates = sorted(by_sym[benchmark])
-    else:
-        dates = sorted({d for m in by_sym.values() for d in m})
+    dates = sorted({d for m in by_sym.values() for d in m})
     mkt = Market(dates=dates)
     for s, m in by_sym.items():
         o, c, cf, last = [], [], [], None
@@ -74,7 +79,23 @@ def build_market(candles_by_symbol: Dict[str, List[Candle]], benchmark: Optional
                 last = bar.close
             cf.append(last)
         mkt.o[s], mkt.c[s], mkt.cf[s] = o, c, cf
+    members = [s for s in (ew_universe or []) if s in mkt.c]
+    if members:
+        v, o, c = 100.0, [], []
+        for i in range(len(dates)):
+            rs = [mkt.c[s][i] / mkt.c[s][i - 1] - 1 for s in members
+                  if i > 0 and mkt.c[s][i] is not None and mkt.c[s][i - 1]]
+            prev = v
+            if rs:
+                v *= 1 + sum(rs) / len(rs)
+            o.append(prev if i > 0 else v)
+            c.append(v)
+        mkt.o[EQW], mkt.c[EQW], mkt.cf[EQW] = o, c, list(c)
     return mkt
+
+
+def covers(m: Market, s: Optional[str], i: int) -> bool:
+    return bool(s) and s in m.cf and m.cf[s][i] is not None
 
 
 # ------------------------------------------------------------------ indicators (use data up to i only)
@@ -107,7 +128,7 @@ def sma(m: Market, s: str, i: int, n: int) -> Optional[float]:
 def risk_on(m: Market, i: int, p: Dict[str, Any]) -> bool:
     if p.get("regime", "off") != "cash":
         return True
-    b = p["benchmark"]
+    b = p.get("regime_symbol") or p["benchmark"]
     avg = sma(m, b, i, int(p.get("sma", 200)))
     return avg is None or (m.cf[b][i] or 0) > avg
 
@@ -294,9 +315,24 @@ def run_period(m: Market, p: Dict[str, Any], cfg: Dict[str, Any], start: int, en
                    start, end, c, capital)
     out = {"strategy": metrics(m, sim, start, end, capital, rf), "last_holdings": sim["holdings"]}
     b = p.get("benchmark")
-    if b and b in m.c:
+    if covers(m, b, start):  # the ETF, bought once with real costs
         bs = simulate(m, lambda i: {b: 1.0}, [start], start, end, c, capital)
-        out["benchmark"] = metrics(m, bs, start, end, capital, rf)
+        out["etf"] = metrics(m, bs, start, end, capital, rf)
+    if EQW in m.c:  # the universe itself, equal weight, no costs (a generous yardstick)
+        free = copy.deepcopy(c)
+        free["slippage_pct"] = 0.0
+        free["charges"] = {**free["charges"], "brokerage_pct": 0, "brokerage_min": 0, "exchange_txn_pct": 0,
+                           "sebi_pct": 0, "intraday": {k: 0 for k in free["charges"]["intraday"]},
+                           "delivery": {k: 0 for k in free["charges"]["delivery"]}}
+        es = simulate(m, lambda i: {EQW: 1.0}, [start], start, end, {**free, "_band": 0}, 1e9)
+        out["universe_ew"] = metrics(m, {**es, "final": es["final"] / 1e9 * capital,
+                                         "equity": [e / 1e9 * capital for e in es["equity"]]},
+                                     start, end, capital, rf)
+    # The comparison that counts: the ETF when its history covers the period, else the universe.
+    primary = "etf" if "etf" in out else ("universe_ew" if "universe_ew" in out else None)
+    if primary:
+        out["benchmark"] = out[primary]
+        out["benchmark_name"] = b if primary == "etf" else "universe equal-weight"
         sc, bc = out["strategy"]["total_return_pct"], out["benchmark"]["total_return_pct"]
         out["excess_total_pct"] = round(sc - bc, 2)
         if out["strategy"]["cagr_pct"] is not None and out["benchmark"]["cagr_pct"] is not None:
@@ -315,8 +351,18 @@ def split(m: Market, p: Dict[str, Any], train_frac: float):
     return w, cut, last
 
 
+def regime_symbol(m: Market, p: Dict[str, Any]) -> Optional[str]:
+    """The benchmark ETF if its history starts with the data, else the
+    universe's equal-weight index, so the filter means the same all along."""
+    b = p.get("benchmark")
+    if covers(m, b, min(len(m.dates) - 1, int(p.get("sma", 200)))):
+        return b
+    return EQW if EQW in m.c else b
+
+
 def evaluate(m: Market, p: Dict[str, Any], cfg: Dict[str, Any], train_frac: float = 0.6,
              capital: float = 100000) -> Dict[str, Any]:
+    p = {**p, "regime_symbol": regime_symbol(m, p)}
     w, cut, last = split(m, p, train_frac)
     return {"params": {k: v for k, v in p.items() if k not in ("universe",)},
             "train": run_period(m, p, cfg, w, cut - 1, capital),
@@ -340,6 +386,7 @@ def grid(strategy: str) -> List[Dict[str, Any]]:
 
 def sweep(m: Market, base: Dict[str, Any], variants: List[Dict[str, Any]], cfg: Dict[str, Any],
           train_frac: float = 0.6, capital: float = 100000, top: int = 5) -> Dict[str, Any]:
+    base = {**base, "regime_symbol": regime_symbol(m, base)}
     # one common split for every variant: the longest warm-up decides it
     w = max(warmup({**base, **v}) for v in variants)
     last = len(m.dates) - 1
@@ -368,8 +415,8 @@ def verdict(best, held: int, shown: int) -> str:
     if not best:
         return "Nothing to judge."
     tr, te = best["train"], best["test"]
-    if "excess_total_pct" not in tr:
-        return "No benchmark data, so nothing to compare against. Fetch the benchmark (e.g. NIFTYBEES)."
+    if "excess_total_pct" not in tr or "excess_total_pct" not in te:
+        return "No benchmark covers these dates, so nothing to compare against."
     if tr["excess_total_pct"] <= 0:
         return "No variation beat simply holding the benchmark on the train period, after costs."
     if te["excess_total_pct"] <= 0:

@@ -129,7 +129,7 @@ python3 gtrade.py portfolio --strategy lowvol --universe nifty100 --source csv
 python3 gtrade.py portfolio --strategy dualmom --assets NIFTYBEES,GOLDBEES --source csv
 ```
 
-Orders fill at the next day's open after the decision, with delivery charges both ways and whole shares; every result is shown beside NIFTYBEES held over the same dates. Read the caveats it prints: index universes use today's members (survivorship bias flatters the past), taxes aren't modelled, and idle cash earns nothing unless you pass `--cash-yield`.
+Orders fill at the next day's open after the decision, with delivery charges both ways and whole shares; every result is shown beside NIFTYBEES held over the same dates, or, where Groww's NIFTYBEES history (from January 2025) doesn't reach, beside an equal-weight index of the universe built from the data. Groww's daily prices aren't adjusted for splits and bonuses, so the tool adjusts them; `python3 gtrade.py audit --universe nifty100` lists each adjustment, and `trader/corporate_actions.csv` (`SYMBOL,YYYY-MM-DD,factor`) can correct one. Read the caveats it prints: index universes use today's members (survivorship bias flatters the past), taxes aren't modelled, and idle cash earns nothing unless you pass `--cash-yield`.
 
 ## Paper trading
 

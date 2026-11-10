@@ -113,3 +113,48 @@ class Universe(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Adjustments(unittest.TestCase):
+    def test_split_bonus_and_demerger_detection(self):
+        from groww_trader import adjust
+        s = series(0.001, n=60)
+        # a 1:10 split on day 20 (price /10 with a +1% move) and a demerger-like drop on day 40
+        s = [Candle(c.ts, c.open / 10, c.high / 10, c.low / 10, c.close / 10, c.volume) if 20 <= k else c
+             for k, c in enumerate(s)]
+        s = [Candle(c.ts, c.open / 1.75, c.high / 1.75, c.low / 1.75, c.close / 1.75, c.volume) if 40 <= k else c
+             for k, c in enumerate(s)]
+        ev = adjust.detect("X", s)
+        self.assertEqual([e["kind"] for e in ev], ["split/bonus", "other"])
+        self.assertEqual(ev[0]["factor"], 10.0)
+        self.assertAlmostEqual(ev[1]["factor"], 1.75, delta=0.01)
+        adj = adjust.apply(s, ev)
+        rets = [b.close / a.close - 1 for a, b in zip(adj, adj[1:])]
+        self.assertLess(max(abs(r) for r in rets), 0.01)  # no fake crashes left
+        self.assertAlmostEqual(adj[-1].close, s[-1].close)  # latest prices unchanged
+
+    def test_real_moves_are_left_alone(self):
+        from groww_trader import adjust
+        s = series(0.0, n=10, jumps={5: 0.75})  # a genuine -25% day
+        self.assertEqual(adjust.detect("X", s), [])
+
+
+class Benchmarks(unittest.TestCase):
+    def test_short_etf_history_falls_back_to_universe_index(self):
+        cfg = load_config("/nonexistent")
+        data = {"A": series(0.001), "B": series(0.0005), "IDX": series(0.0008)[250:]}  # ETF starts late
+        m = pf.build_market(data, "IDX", ew_universe=["A", "B"])
+        self.assertEqual(len(m.dates), 400)                  # calendar no longer cut to the ETF's dates
+        p = {"strategy": "momentum", "universe": ["A", "B"], "benchmark": "IDX", "lookback": 100, "skip": 0,
+             "top": 1, "regime": "cash", "sma": 50}
+        self.assertEqual(pf.regime_symbol(m, p), pf.EQW)
+        r = pf.run_period(m, p, cfg, 120, 240, 100000)
+        self.assertEqual(r["benchmark_name"], "universe equal-weight")
+        self.assertNotIn("etf", r)
+        r2 = pf.run_period(m, p, cfg, 260, 399, 100000)
+        self.assertEqual(r2["benchmark_name"], "IDX")         # ETF used once it covers the period
+        # equal-weight index ~ average of A and B growth, no costs
+        ew = r["universe_ew"]["total_return_pct"] / 100
+        ga = m.cf["A"][240] / m.cf["A"][120] - 1
+        gb = m.cf["B"][240] / m.cf["B"][120] - 1
+        self.assertTrue(min(ga, gb) - 0.01 < ew < max(ga, gb) + 0.01)

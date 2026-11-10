@@ -546,6 +546,10 @@ def cmd_swing(args, cfg):
     if not data:
         sys.exit(f"error: no daily data for any symbol: {errors}\n"
                  "Fetch it first: gtrade.py fetch --interval 1440 --days 1100")
+    from groww_trader import adjust
+    data, events = adjust.adjust_all(data)
+    if events:
+        print(f"Adjusted for {len(events)} corporate actions (splits, bonuses, demergers).")
     lst = lambda x, conv=str: [conv(p.strip()) for p in x.split(",") if p.strip()]
     rules = swing.grid(lst(args.lookbacks, int), lst(args.stops), lst(args.targets),
                        lst(args.holds, int), lst(args.trends, int))
@@ -589,7 +593,7 @@ def cmd_portfolio(args, cfg):
         uni, udesc = [s.upper() for s in cfg["watchlist"]], f"your watchlist ({len(cfg['watchlist'])} stocks)"
     bench = args.benchmark.upper() if args.benchmark else None
     assets = [a.strip().upper() for a in args.assets.split(",") if a.strip()]
-    need = (assets if args.strategy == "dualmom" else uni) + ([bench] if bench else [])
+    need = (assets + (uni if args.universe else []) if args.strategy == "dualmom" else uni) + ([bench] if bench else [])
     src = get_source(args.source, cfg["exchange"])
     data, errors = {}, {}
     for n, s in enumerate(dict.fromkeys(need), 1):
@@ -602,7 +606,11 @@ def cmd_portfolio(args, cfg):
     if bench and bench not in data:
         sys.exit(f"error: no daily data for the benchmark {bench}. Fetch it: gtrade.py fetch {bench} "
                  f"--interval 1440 --days {args.days}")
-    m = pf.build_market(data, bench)
+    events = []
+    if not args.no_adjust:
+        from groww_trader import adjust
+        data, events = adjust.adjust_all(data)
+    m = pf.build_market(data, bench, ew_universe=[s for s in uni if s in data])
     base = {"strategy": args.strategy, "universe": [s for s in uni if s in data], "assets": assets,
             "benchmark": bench, "lookback": args.lookback, "skip": args.skip, "top": args.top,
             "weight": args.weight, "regime": args.regime, "sma": args.sma, "rebalance": args.rebalance,
@@ -615,7 +623,7 @@ def cmd_portfolio(args, cfg):
             res = pf.evaluate(m, base, cfg, train_frac=args.train, capital=capital)
     except ValueError as e:
         sys.exit(f"error: {e}")
-    res.update(universe=udesc, data_errors=errors, survivorship_note=(
+    res.update(universe=udesc, data_errors=errors, adjustments=events, survivorship_note=(
         "Uses today's index members for past years, which flatters results (survivorship bias)."
         if args.universe and args.universe.lower().startswith("nifty") else None))
     if args.write:
@@ -625,8 +633,17 @@ def cmd_portfolio(args, cfg):
         return
 
     pct = lambda v: "—" if v is None else f"{v:+.1f}%"
-    print(f"{args.strategy} on {udesc}, benchmark {bench or 'none'}, rebalance {args.rebalance}, "
+    print(f"{args.strategy} on {udesc}, rebalance {args.rebalance}, "
           f"after delivery charges and {cfg.get('slippage_pct', 0)}% slippage")
+    if events:
+        kinds = {}
+        for e in events:
+            kinds[e["kind"]] = kinds.get(e["kind"], 0) + 1
+        print(f"Adjusted for {len(events)} corporate actions ({', '.join(f'{v} {k}' for k, v in kinds.items())}); "
+              "see `audit` for the list.")
+    regime_sym = pf.regime_symbol(m, base) if args.regime == "cash" else None
+    if regime_sym == pf.EQW:
+        print(f"Regime filter uses the universe's equal-weight index ({bench} history is too short).")
     if args.sweep:
         sp = res["split"]
         print(f"Train (choose): {sp['train'][0]} to {sp['train'][1]}   Test (unseen): {sp['test'][0]} to {sp['test'][1]}")
@@ -640,7 +657,8 @@ def cmd_portfolio(args, cfg):
             print(f"{name:40} {pct(tr['strategy']['total_return_pct']):>9} {pct(tr.get('benchmark', {}).get('total_return_pct')):>9} "
                   f"{pct(te['strategy']['total_return_pct']):>9} {pct(te.get('benchmark', {}).get('total_return_pct')):>9} "
                   f"{pct(te['strategy']['max_drawdown_pct']):>10}")
-        print("\n(total returns over each period, after costs)")
+        bn = {r["train"].get("benchmark_name") for r in res["top"]} | {r["test"].get("benchmark_name") for r in res["top"]}
+        print(f"\n(total returns over each period, after costs; bench = {', '.join(sorted(x for x in bn if x))})")
     else:
         head = f"{'period':7} {'dates':25} {'return':>8} {'CAGR':>7} {'bench':>8} {'maxDD':>7} {'Sharpe':>6} {'trades':>6} {'costs ₹':>9}"
         print(head + "\n" + "-" * len(head))
@@ -652,9 +670,16 @@ def cmd_portfolio(args, cfg):
                   f"{(s['sharpe'] if s['sharpe'] is not None else '—'):>6} {s['trades']:>6} {s['costs']:>9.0f}")
         held = res["full"]["last_holdings"]
         print(f"\nHolding at the end: {', '.join(f'{k} x{v}' for k, v in held.items()) or 'cash'}")
-        tr, te = res["train"].get("excess_total_pct"), res["test"].get("excess_total_pct")
-        if tr is not None:
-            print(f"Versus the benchmark: train {pct(tr)}, test {pct(te)} (total return difference)")
+        for name in ("train", "test"):
+            r = res[name]
+            parts = []
+            if "etf" in r:
+                parts.append(f"{bench} {pct(r['etf']['total_return_pct'])}")
+            if "universe_ew" in r:
+                parts.append(f"universe equal-weight {pct(r['universe_ew']['total_return_pct'])} (no costs)")
+            if parts:
+                print(f"{name}: strategy {pct(r['strategy']['total_return_pct'])} vs " + ", ".join(parts)
+                      + (f"  -> judged against {r['benchmark_name']}: {pct(r['excess_total_pct'])}" if "excess_total_pct" in r else ""))
     if res.get("verdict"):
         print(f"\nVerdict: {res['verdict']}")
     if res.get("survivorship_note"):
@@ -689,7 +714,16 @@ def cmd_audit(args, cfg):
                               "close": b_.close, "change_pct": round(100 * r, 1),
                               "ratio": round(a_.close / b_.close, 2) if b_.close else None})
     rows.sort(key=lambda r: r["first"])
+    from groww_trader import adjust
+    proposed = []
+    if args.interval == 1440:
+        ov = adjust.load_overrides()
+        for s in syms:
+            p = csv_path(s, args.interval)
+            if p.exists():
+                proposed += adjust.detect(s, load_csv(p), ov)
     out({"symbols": len(syms), "with_data": len(rows), "missing": missing,
+         "adjustments_applied_in_tests": proposed,
          "first_day_spread": [rows[0]["first"], rows[-1]["first"]] if rows else None,
          "latest_starters": rows[-8:], "big_one_day_moves": jumps[: args.limit],
          "big_moves_total": len(jumps)})
@@ -823,6 +857,7 @@ def main(argv=None):
     p.add_argument("--days", type=int, default=2500, help="calendar days of daily history to use")
     p.add_argument("--train", type=float, default=0.6)
     p.add_argument("--sweep", action="store_true", help="try a small grid of variations, judged on unseen data")
+    p.add_argument("--no-adjust", action="store_true", help="don't adjust for splits, bonuses and demergers")
     p.add_argument("--source", default="auto", choices=["auto", "csv", "groww"])
     p.add_argument("--json", action="store_true")
     p.add_argument("--all", action="store_true")
