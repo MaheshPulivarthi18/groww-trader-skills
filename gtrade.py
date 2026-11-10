@@ -91,6 +91,9 @@ def cmd_fetch(args, cfg):
                       "last_day": str(c[-1].ts.date()) if c else None,
                       "cached_from": str(cached[0].ts.date()) if cached else None,
                       "file": str(p)}
+            st = getattr(src, "parse_stats", {})
+            if st and set(st) - {"kept"}:
+                res[s]["skipped_rows"] = {k: v for k, v in st.items() if k != "kept"}
             failed = getattr(src, "failed_windows", [])
             if failed:
                 res[s]["failed_windows"] = len(failed)
@@ -98,6 +101,30 @@ def cmd_fetch(args, cfg):
         except Exception as e:  # keep going across symbols
             res[s] = {"error": str(e)}
     out(res)
+
+
+def cmd_inspect(args, cfg):
+    """Show what Groww actually returns for one symbol, to debug missing candles."""
+    from groww_trader.data import parse_candle_rows
+    src = get_source("groww", cfg["exchange"])
+    end = now_ist()
+    start = end - timedelta(days=args.days)
+    c = src.client
+    resp = c.get_historical_candles(
+        exchange=src._const("EXCHANGE", src.exchange), segment=src._const("SEGMENT", src.segment),
+        groww_symbol=f"{src.exchange.upper()}-{args.symbol.upper()}",
+        start_time=start.strftime("%Y-%m-%d %H:%M:%S"), end_time=end.strftime("%Y-%m-%d %H:%M:%S"),
+        candle_interval=src._interval_const(args.interval))
+    rows = (resp.get("candles") or []) if isinstance(resp, dict) else (resp or [])
+    stats = {}
+    kept = parse_candle_rows(rows, stats)
+    out({"symbol": args.symbol.upper(), "interval_min": args.interval,
+         "asked": [str(start)[:19], str(end)[:19]],
+         "response_type": type(resp).__name__,
+         "response_keys": sorted(resp.keys()) if isinstance(resp, dict) else None,
+         "rows": len(rows), "parse": stats,
+         "first_rows": rows[:3], "last_rows": rows[-3:],
+         "first_kept": str(kept[0].ts) if kept else None, "last_kept": str(kept[-1].ts) if kept else None})
 
 
 def cmd_scan(args, cfg):
@@ -563,6 +590,11 @@ def main(argv=None):
     p = add("fetch", cmd_fetch, symbols=True)
     p.add_argument("--interval", type=int, default=5)
     p.add_argument("--days", type=int, default=60)
+    p = sub.add_parser("inspect", help="show raw Groww candles for one symbol (debugging)")
+    p.set_defaults(fn=cmd_inspect)
+    p.add_argument("symbol")
+    p.add_argument("--interval", type=int, default=1440)
+    p.add_argument("--days", type=int, default=90)
     p = add("scan", cmd_scan, symbols=True)
     p.add_argument("--setup", choices=SETUPS)
     p.add_argument("--interval", type=int)
@@ -610,7 +642,7 @@ def main(argv=None):
     p.add_argument("--targets", help="comma list, default 1R,1.5R,2R,3R")
     p.add_argument("--ranges", help="opening-range minutes to try for orb/orb_fade, e.g. 15,30")
     p.add_argument("--interval", type=int)
-    p.add_argument("--days", type=int, default=60)
+    p.add_argument("--days", type=int, default=365, help="days of history to use (default 365)")
     p.add_argument("--train", type=float, default=0.6, help="fraction of sessions used to choose (default 0.6)")
     p.add_argument("--min-trades", type=int, default=10)
     p.add_argument("--shorts", action="store_true", help="also take short trades (intraday MIS only)")

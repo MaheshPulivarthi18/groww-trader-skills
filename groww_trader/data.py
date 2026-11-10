@@ -79,12 +79,13 @@ def _num(x) -> Optional[float]:
         return None
 
 
-def parse_candle_rows(rows) -> List[Candle]:
+def parse_candle_rows(rows, stats: Optional[Dict[str, int]] = None) -> List[Candle]:
     """Turn Groww candle rows into Candles. Rows are lists
     [timestamp, open, high, low, close, volume, ...] or dicts with those
     keys. Rows with a missing timestamp or any missing O/H/L/C (Groww sends
     these for intervals with no trades) are skipped; missing volume is 0."""
     out: List[Candle] = []
+    bump = (lambda k: stats.__setitem__(k, stats.get(k, 0) + 1)) if stats is not None else (lambda k: None)
     for row in rows or []:
         if isinstance(row, dict):
             ts = row.get("timestamp") or row.get("time") or row.get("ts")
@@ -93,15 +94,22 @@ def parse_candle_rows(rows) -> List[Candle]:
         else:
             row = list(row)
             if len(row) < 5:
+                bump("short_row")
                 continue
             ts, vals, vol = row[0], row[1:5], (row[5] if len(row) > 5 else None)
         o, h, l, c = (_num(v) for v in vals)
-        if ts is None or None in (o, h, l, c):
+        if ts is None:
+            bump("no_timestamp")
+            continue
+        if None in (o, h, l, c):
+            bump("missing_price")
             continue
         try:
             when = parse_ts(ts)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError, OSError):
+            bump("bad_timestamp")
             continue
+        bump("kept")
         out.append(Candle(when, o, h, l, c, _num(vol) or 0.0))
     return out
 
@@ -190,6 +198,7 @@ class GrowwSource:
         out: List[Candle] = []
         self.raw_rows = 0
         self.failed_windows: List[str] = []
+        self.parse_stats: Dict[str, int] = {}
         windows = 0
         t0 = start
         while t0 < end:
@@ -217,7 +226,7 @@ class GrowwSource:
             else:
                 rows = resp or []
             self.raw_rows += len(rows)
-            out.extend(parse_candle_rows(rows))
+            out.extend(parse_candle_rows(rows, self.parse_stats))
             t0 = t1
             _time.sleep(0.25)  # be polite to the API
         return merge_candles(out)

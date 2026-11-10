@@ -381,3 +381,14 @@ class LongFetch(unittest.TestCase):
         s = self._src("2099-01-01")
         with self.assertRaises(RuntimeError):
             s.candles("SBIN", 5, datetime(2026, 5, 1, tzinfo=IST), datetime(2026, 10, 15, tzinfo=IST))
+
+
+class ParseStats(unittest.TestCase):
+    def test_reasons_counted_and_ms_epochs(self):
+        from groww_trader.data import parse_candle_rows
+        st = {}
+        rows = [[1760932500, 1, 2, 0.5, 1.5, 9], [1760932500000, 1, 2, 0.5, 1.5, 9],
+                [1760932800, None, None, None, None, None], ["not a date", 1, 2, 0.5, 1.5, 9], [1, 2]]
+        out = parse_candle_rows(rows, st)
+        self.assertEqual(st, {"kept": 2, "missing_price": 1, "bad_timestamp": 1, "short_row": 1})
+        self.assertEqual(out[0].ts, out[1].ts)  # seconds and milliseconds agree

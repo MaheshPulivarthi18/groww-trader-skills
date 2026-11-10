@@ -37,11 +37,13 @@ def parse_ts(value) -> datetime:
     if isinstance(value, datetime):
         dt = value
     elif isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value), tz=IST)
+        v = float(value)
+        return datetime.fromtimestamp(v / 1000 if v > 1e11 else v, tz=IST)  # seconds or milliseconds
     else:
         s = str(value).strip()
         if s.isdigit():
-            return datetime.fromtimestamp(int(s), tz=IST)
+            v = int(s)
+            return datetime.fromtimestamp(v / 1000 if v > 1e11 else v, tz=IST)
         dt = datetime.fromisoformat(s.replace(" ", "T", 1))
     if dt.tzinfo is None:
         return dt.replace(tzinfo=IST)
