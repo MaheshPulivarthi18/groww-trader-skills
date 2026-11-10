@@ -22,6 +22,7 @@ Inspired by the design of [day-trader-skill](https://github.com/jakeschincariol/
 | `groww-risk` | PASS or BLOCK every ticket against your rules | `trader/orders.json` |
 | `groww-backtest` | replay the rule over past sessions after slippage and charges | `trader/backtest.json` |
 | `groww-paper` | run the whole pipeline on live data and record simulated trades; never sends orders | `trader/journal.json` |
+| `groww-review` | answer questions and build dashboards from the MongoDB mirror (optional) | reads only |
 
 Each skill reads what the previous one wrote:
 
@@ -101,6 +102,20 @@ Example ticket (from the synthetic test data, with the default config):
     stop ₹100.5  target ₹103.25  flat by 15:10 IST
     if stopped: ₹-308.66   if target: ₹367.24   (charges ~₹38.66)
 ```
+
+## Optional: MongoDB mirror
+
+To review activity from anywhere, or ask Claude about it through MongoDB's MCP server, the bot can copy its journal, daily summaries, events, a heartbeat and saved backtests to MongoDB (an Atlas free M0 cluster is plenty).
+
+```
+pip install pymongo
+export GTRADE_MONGO_URI='mongodb+srv://USER:PASSWORD@your-cluster.mongodb.net/?retryWrites=true&w=majority'
+export GTRADE_MONGO_DB='groww_trader'
+python3 gtrade.py mongo check     # ping and collection counts
+python3 gtrade.py mongo sync      # push the existing local journal once
+```
+
+After that, `paper run` / `paper once` sync every bar and `backtest --write` saves the run. The local `trader/` files stay the source of truth: MongoDB gets a best-effort copy with short timeouts, and if it's unreachable the bot prints one warning and carries on trading. Use a database user limited to `readWrite` on this one database, and in Atlas allow only your server's IP.
 
 ## Config
 

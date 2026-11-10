@@ -33,6 +33,7 @@ from groww_trader.plan import make_plan  # noqa: E402
 from groww_trader.risk import check as risk_check  # noqa: E402
 from groww_trader.setups import SETUPS, detect  # noqa: E402
 from groww_trader.sizing import size  # noqa: E402
+from groww_trader.store import get_store  # noqa: E402
 
 
 def out(obj):
@@ -200,6 +201,7 @@ def cmd_backtest(args, cfg):
     res["outlook"] = bt.bootstrap(res["trades"], next_n=args.next)
     if args.write:
         write_json("backtest.json", res)
+        get_store().save_backtest(res)
     if args.trades:
         out(res)
     else:
@@ -261,11 +263,18 @@ def cmd_paper(args, cfg):
         data, errors = _paper_data(src, symbols, interval)
         journal, events = paper.step(cfg, data, now, journal, interval)
         write_json("journal.json", journal)
+        status = _paper_status(journal, now.date())
         for ev in events:
             print(f"[{now:%H:%M}] {ev}", flush=True)
         for s, err in errors.items():
             print(f"[{now:%H:%M}] data error {s}: {err}", flush=True)
-        print(f"[{now:%H:%M}] {_paper_status(journal, now.date())}", flush=True)
+        print(f"[{now:%H:%M}] {status}", flush=True)
+        # Optional mirror to MongoDB, after all trading work is done and saved.
+        store = get_store()
+        if store.enabled:
+            store.sync_journal(journal, day=str(now.date()))
+            store.log_events(events + [f"DATAERR {s}: {e}" for s, e in errors.items()], now)
+            store.heartbeat(now, status, symbols, errors)
 
     if args.action == "once":
         now = datetime.fromisoformat(args.now).replace(tzinfo=IST) if args.now else now_ist()
@@ -295,6 +304,17 @@ def cmd_paper(args, cfg):
             time.sleep(max(1.0, (wake - now_ist()).total_seconds()))
     except KeyboardInterrupt:
         print("\nStopped. Journal is saved in trader/journal.json; run again to resume.")
+
+
+def cmd_mongo(args, cfg):
+    store = get_store()
+    if args.action == "check":
+        out(store.check())
+        return
+    # sync: push the whole local journal (e.g. after enabling MongoDB)
+    journal = read_json("journal.json", [])
+    ok = store.sync_journal(journal, full=True)
+    out({"ok": ok, "journal_entries": len(journal), **({} if ok else {"reason": store.error})})
 
 
 def main(argv=None):
@@ -353,6 +373,9 @@ def main(argv=None):
     p.add_argument("--now", help="once: YYYY-MM-DDTHH:MM, step as of this IST time")
     p.add_argument("--replay", action="store_true", help="report on replay journal")
     p.add_argument("--write", action="store_true", help="replay: save to trader/journal_replay.json")
+    p = sub.add_parser("mongo", help="optional MongoDB mirror: check the connection or push the journal")
+    p.set_defaults(fn=cmd_mongo)
+    p.add_argument("action", choices=["check", "sync"])
 
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
