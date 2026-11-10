@@ -76,7 +76,8 @@ def cmd_fetch(args, cfg):
     for s in symbols_arg(args, cfg):
         try:
             c = get_candles(src, s, args.interval, args.days)
-            res[s] = {"candles": len(c), "file": str(csv_path(s, args.interval))}
+            res[s] = {"candles": len(c), "rows_from_groww": getattr(src, "raw_rows", None),
+                      "file": str(csv_path(s, args.interval))}
         except Exception as e:  # keep going across symbols
             res[s] = {"error": str(e)}
     out(res)

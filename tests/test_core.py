@@ -163,6 +163,27 @@ class Credentials(unittest.TestCase):
             normalize_totp_secret("eyJhbGciOi.J9.x1")
 
 
+class CandleParsing(unittest.TestCase):
+    def test_skips_rows_with_missing_prices(self):
+        from groww_trader.data import parse_candle_rows
+        rows = [
+            [1760932500, 812.0, 813.5, 811.2, 813.0, 15000],       # epoch seconds
+            ["2026-10-20T09:20:00", 813.0, 814.0, 812.5, 813.8, None],  # no volume
+            [1760933100, None, None, None, None, None],            # no trades: skip
+            [None, 1, 2, 0.5, 1.5, 10],                             # no time: skip
+            [1760933400, "814", "815", "813", "814.5"],             # strings, 5 fields
+            {"timestamp": "2026-10-20 09:35:00", "open": 1, "high": 2, "low": 0.5,
+             "close": 1.5, "volume": 7},
+            [1760933700, 1.0],                                      # short row: skip
+        ]
+        out = parse_candle_rows(rows)
+        self.assertEqual(len(out), 4)
+        self.assertEqual(out[0].ts.strftime("%H:%M"), "09:25")
+        self.assertEqual(out[1].volume, 0.0)
+        self.assertEqual(out[2].close, 814.5)
+        self.assertEqual(parse_candle_rows(None), [])
+
+
 class Indicators(unittest.TestCase):
     def test_rsi_extremes(self):
         self.assertEqual(rsi(list(range(1, 30)))[-1], 100.0)

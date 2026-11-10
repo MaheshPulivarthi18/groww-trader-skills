@@ -70,6 +70,42 @@ def load_csv(path: Path) -> List[Candle]:
     return out
 
 
+def _num(x) -> Optional[float]:
+    if x is None or x == "":
+        return None
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_candle_rows(rows) -> List[Candle]:
+    """Turn Groww candle rows into Candles. Rows are lists
+    [timestamp, open, high, low, close, volume, ...] or dicts with those
+    keys. Rows with a missing timestamp or any missing O/H/L/C (Groww sends
+    these for intervals with no trades) are skipped; missing volume is 0."""
+    out: List[Candle] = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            ts = row.get("timestamp") or row.get("time") or row.get("ts")
+            vals = [row.get(k) for k in ("open", "high", "low", "close")]
+            vol = row.get("volume")
+        else:
+            row = list(row)
+            if len(row) < 5:
+                continue
+            ts, vals, vol = row[0], row[1:5], (row[5] if len(row) > 5 else None)
+        o, h, l, c = (_num(v) for v in vals)
+        if ts is None or None in (o, h, l, c):
+            continue
+        try:
+            when = parse_ts(ts)
+        except (TypeError, ValueError):
+            continue
+        out.append(Candle(when, o, h, l, c, _num(vol) or 0.0))
+    return out
+
+
 def merge_candles(*lists: Iterable[Candle]) -> List[Candle]:
     seen: Dict[datetime, Candle] = {}
     for lst in lists:
@@ -150,6 +186,7 @@ class GrowwSource:
     def candles(self, symbol: str, interval_min: int, start: datetime, end: datetime) -> List[Candle]:  # pragma: no cover
         step = timedelta(days=max_days_per_request(interval_min))
         out: List[Candle] = []
+        self.raw_rows = 0
         t0 = start
         while t0 < end:
             t1 = min(t0 + step, end)
@@ -161,10 +198,12 @@ class GrowwSource:
                 end_time=t1.strftime("%Y-%m-%d %H:%M:%S"),
                 candle_interval=self._interval_const(interval_min),
             )
-            for row in (resp or {}).get("candles") or []:
-                ts, o, h, l, c = row[:5]
-                v = row[5] if len(row) > 5 and row[5] is not None else 0
-                out.append(Candle(parse_ts(ts), float(o), float(h), float(l), float(c), float(v)))
+            if isinstance(resp, dict):
+                rows = resp.get("candles") or []
+            else:
+                rows = resp or []
+            self.raw_rows += len(rows)
+            out.extend(parse_candle_rows(rows))
             t0 = t1
             _time.sleep(0.25)  # be polite to the API
         return merge_candles(out)
