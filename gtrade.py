@@ -358,7 +358,7 @@ def main(argv=None):
     cfg = load_config(args.config)
     try:
         args.fn(args, cfg)
-    except RuntimeError as e:  # setup problems: show the message, not a traceback
+    except (RuntimeError, FileNotFoundError) as e:  # setup problems: one line, no traceback
         sys.exit(f"error: {e}")
 
 

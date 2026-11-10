@@ -124,8 +124,10 @@ class CSVSource:
         p = csv_path(symbol, interval_min, self.folder)
         if not p.exists():
             raise FileNotFoundError(
-                f"No cached candles for {symbol} ({interval_tag(interval_min)}) at {p}. "
-                f"Run: gtrade.py fetch {symbol} --interval {interval_min}")
+                f"No cached candles for {symbol} ({interval_tag(interval_min)}) at {p.resolve()}. "
+                f"If you fetched them already, you're probably in a different folder: cd to the folder "
+                f"that contains trader/, or set GTRADE_HOME to that trader/ folder. "
+                f"Otherwise run: gtrade.py fetch {symbol} --interval {interval_min}")
         return [c for c in load_csv(p) if start <= c.ts <= end]
 
     def ltp(self, symbols: Sequence[str]) -> Dict[str, float]:
