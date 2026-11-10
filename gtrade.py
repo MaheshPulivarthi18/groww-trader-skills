@@ -665,6 +665,36 @@ def cmd_portfolio(args, cfg):
         print(f"Data errors ({len(errors)}): {', '.join(list(errors)[:10])}{' ...' if len(errors) > 10 else ''}")
 
 
+def cmd_audit(args, cfg):
+    """Check cached daily data: history length and one-day jumps that look
+    like unadjusted splits or bonus issues."""
+    from groww_trader import universe
+    syms = universe.load(args.universe)[0] if args.universe else symbols_arg(args, cfg)
+    syms += [s.upper() for s in (args.symbols or []) if args.universe and s.upper() not in syms]
+    rows, jumps, missing = [], [], []
+    for s in syms:
+        p = csv_path(s, args.interval)
+        if not p.exists():
+            missing.append(s)
+            continue
+        c = load_csv(p)
+        if not c:
+            missing.append(s)
+            continue
+        rows.append({"symbol": s, "first": str(c[0].ts.date()), "last": str(c[-1].ts.date()), "bars": len(c)})
+        for a_, b_ in zip(c, c[1:]):
+            r = b_.close / a_.close - 1 if a_.close else 0
+            if abs(r) >= args.jump / 100:
+                jumps.append({"symbol": s, "date": str(b_.ts.date()), "prev_close": a_.close,
+                              "close": b_.close, "change_pct": round(100 * r, 1),
+                              "ratio": round(a_.close / b_.close, 2) if b_.close else None})
+    rows.sort(key=lambda r: r["first"])
+    out({"symbols": len(syms), "with_data": len(rows), "missing": missing,
+         "first_day_spread": [rows[0]["first"], rows[-1]["first"]] if rows else None,
+         "latest_starters": rows[-8:], "big_one_day_moves": jumps[: args.limit],
+         "big_moves_total": len(jumps)})
+
+
 def cmd_mongo(args, cfg):
     store = get_store()
     if args.action == "check":
@@ -768,6 +798,11 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p.add_argument("--all", action="store_true")
     p.add_argument("--write", action="store_true", help="save to trader/swing.json")
+    p = add("audit", cmd_audit, symbols=True)
+    p.add_argument("--universe")
+    p.add_argument("--interval", type=int, default=1440)
+    p.add_argument("--jump", type=float, default=35, help="flag one-day moves at least this %% (default 35)")
+    p.add_argument("--limit", type=int, default=60)
     p = sub.add_parser("portfolio", help="multi-stock strategies (momentum, low-vol, dual momentum) vs the index")
     p.set_defaults(fn=cmd_portfolio)
     p.add_argument("--strategy", default="momentum", choices=["momentum", "lowvol", "dualmom"])
