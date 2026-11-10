@@ -82,10 +82,16 @@ def _num(x) -> Optional[float]:
 def parse_candle_rows(rows, stats: Optional[Dict[str, int]] = None) -> List[Candle]:
     """Turn Groww candle rows into Candles. Rows are lists
     [timestamp, open, high, low, close, volume, ...] or dicts with those
-    keys. Rows with a missing timestamp or any missing O/H/L/C (Groww sends
-    these for intervals with no trades) are skipped; missing volume is 0."""
+    keys. Rows with a missing timestamp, or missing high/low/close (Groww
+    sends these for intervals with no trades), are skipped; missing volume is 0.
+
+    Groww's daily candles (and some others) leave the OPEN empty. Such a row
+    is kept with open estimated as the previous close, clamped into the bar's
+    low..high range (so a gap shows up as an open at the low or high). It's
+    counted as "open_filled" so you can see how much of the data it touched."""
     out: List[Candle] = []
     bump = (lambda k: stats.__setitem__(k, stats.get(k, 0) + 1)) if stats is not None else (lambda k: None)
+    prev_close: Optional[float] = None
     for row in rows or []:
         if isinstance(row, dict):
             ts = row.get("timestamp") or row.get("time") or row.get("ts")
@@ -101,15 +107,19 @@ def parse_candle_rows(rows, stats: Optional[Dict[str, int]] = None) -> List[Cand
         if ts is None:
             bump("no_timestamp")
             continue
-        if None in (o, h, l, c):
+        if None in (h, l, c):
             bump("missing_price")
             continue
+        if o is None:
+            o = round(min(max(prev_close if prev_close is not None else c, l), h), 2)
+            bump("open_filled")
         try:
             when = parse_ts(ts)
         except (TypeError, ValueError, OverflowError, OSError):
             bump("bad_timestamp")
             continue
         bump("kept")
+        prev_close = c
         out.append(Candle(when, o, h, l, c, _num(vol) or 0.0))
     return out
 

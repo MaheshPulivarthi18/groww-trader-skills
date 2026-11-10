@@ -392,3 +392,13 @@ class ParseStats(unittest.TestCase):
         out = parse_candle_rows(rows, st)
         self.assertEqual(st, {"kept": 2, "missing_price": 1, "bad_timestamp": 1, "short_row": 1})
         self.assertEqual(out[0].ts, out[1].ts)  # seconds and milliseconds agree
+
+    def test_missing_open_is_estimated_within_range(self):
+        from groww_trader.data import parse_candle_rows
+        st = {}
+        rows = [["2026-08-12T00:00:00", None, 1085.5, 1066.0, 1082.0, 100, None],   # no previous close
+                ["2026-08-13T00:00:00", None, 1086.6, 1074.8, 1083.0, 100, None],   # prev close 1082 in range
+                ["2026-08-14T00:00:00", None, 1100.0, 1090.0, 1095.0, 100, None]]   # gap up: clamp to low
+        out = parse_candle_rows(rows, st)
+        self.assertEqual([c.open for c in out], [1082.0, 1082.0, 1090.0])
+        self.assertEqual(st, {"open_filled": 3, "kept": 3})
