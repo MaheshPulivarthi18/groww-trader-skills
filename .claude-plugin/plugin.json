@@ -1,7 +1,7 @@
 {
   "name": "groww-trader-skills",
-  "version": "0.4.0",
-  "description": "Claude skills for trading Indian markets with your own Groww account: scan, plan exits, size, risk-check, backtest, sweep and paper trade after Indian charges, with optional Telegram alerts and MongoDB review. Paper first. Not financial advice.",
+  "version": "0.5.0",
+  "description": "Claude skills for trading Indian markets with your own Groww account: scan, plan exits, size, risk-check, backtest, sweep (intraday and swing) and paper trade after Indian charges, with optional Telegram alerts and MongoDB review. Paper first. Not financial advice.",
   "author": {"name": "MaheshPulivarthi18"},
   "repository": "https://github.com/MaheshPulivarthi18/groww-trader-skills",
   "license": "MIT",

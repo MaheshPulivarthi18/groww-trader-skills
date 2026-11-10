@@ -189,17 +189,29 @@ class GrowwSource:
         step = timedelta(days=max_days_per_request(interval_min))
         out: List[Candle] = []
         self.raw_rows = 0
+        self.failed_windows: List[str] = []
+        windows = 0
         t0 = start
         while t0 < end:
             t1 = min(t0 + step, end)
-            resp = self.client.get_historical_candles(
-                exchange=self._const("EXCHANGE", self.exchange),
-                segment=self._const("SEGMENT", self.segment),
-                groww_symbol=f"{self.exchange.upper()}-{symbol.upper()}",
-                start_time=t0.strftime("%Y-%m-%d %H:%M:%S"),
-                end_time=t1.strftime("%Y-%m-%d %H:%M:%S"),
-                candle_interval=self._interval_const(interval_min),
-            )
+            windows += 1
+            try:
+                resp = self.client.get_historical_candles(
+                    exchange=self._const("EXCHANGE", self.exchange),
+                    segment=self._const("SEGMENT", self.segment),
+                    groww_symbol=f"{self.exchange.upper()}-{symbol.upper()}",
+                    start_time=t0.strftime("%Y-%m-%d %H:%M:%S"),
+                    end_time=t1.strftime("%Y-%m-%d %H:%M:%S"),
+                    candle_interval=self._interval_const(interval_min),
+                )
+            except Exception as e:
+                # Old windows may be beyond what Groww keeps for this interval:
+                # note it and keep going, so a long --days still gets what exists.
+                self.failed_windows.append(f"{t0:%Y-%m-%d}..{t1:%Y-%m-%d}: {str(e)[:150]}")
+                if len(self.failed_windows) == windows and t1 >= end:
+                    raise
+                t0 = t1
+                continue
             if isinstance(resp, dict):
                 rows = resp.get("candles") or []
             else:

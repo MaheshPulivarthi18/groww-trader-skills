@@ -17,13 +17,18 @@ python3 <repo>/gtrade.py backtest SBIN --source csv --trades     # offline, list
 
 Groww serves 5-minute candles in windows of up to 30 days per request; the tool splits longer ranges and caches them in `trader/data/`.
 
-## Fill model (conservative on purpose)
+## Setups
 
-- Entry at the **open of the bar after** the trigger bar, plus slippage.
-- If one bar touches both stop and target, the **stop** counts first.
-- A gap through the stop fills at the bar's open, not the stop.
-- Still open at `flat_by`: exit at that bar's open.
-- Slippage (`slippage_pct`, per side) and full charges on every trade.
+`orb` (opening-range breakout), `pdh_breakout` (previous-day high/low), `orb_fade` (failed opening-range breakout traded in reverse; stop beyond the failed move), `vwap_reclaim` (close back above the session VWAP after `min_bars_away` closes below; stop at the low of that stretch). `--shorts` also takes short trades.
+
+## Fill model (conservative on purpose; config `fills`)
+
+- Entry at the **open of the bar after** the trigger bar, plus slippage (`fills.entry: "mid"` is a harsher stress test).
+- Targets are limit orders: filled only if price **trades a tick beyond** the target, at the target (no slippage). A touch isn't a fill.
+- Stops are market orders: slippage plus `fills.stop_extra_slippage_pct`. A gap through the stop fills at the bar's open.
+- If one bar reaches both stop and target, the **stop** counts first.
+- Still open at `flat_by`: exit at that bar's open, with slippage.
+- Full charges on every trade.
 
 ## Output
 

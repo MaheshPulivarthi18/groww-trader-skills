@@ -15,7 +15,9 @@ python3 <repo>/gtrade.py sweep --setups orb --targets 1.5R,2R,3R --ranges 15,30 
 python3 <repo>/gtrade.py sweep SBIN ICICIBANK --stops pct:0.5,pct:1 --json --write
 ```
 
-Defaults: setups `orb,pdh_breakout`; every stop that suits each setup (`orb`: or_mid, or_low, pct:0.5, pct:1, atr:1.5; `pdh_breakout`: level, pct:0.5, pct:1, atr:1.5); targets `1R,1.5R,2R,3R`; train 60%; a variation needs at least `--min-trades 10` train trades to be ranked. Uses the same fill model, slippage and charges as `groww-backtest`. Fetch data first (`fetch --days 60` or more); `--source csv` reuses the cache.
+Defaults: all four setups (`orb`, `pdh_breakout`, `orb_fade`, `vwap_reclaim`); every stop that suits each setup (`orb`: or_mid, or_low, pct:0.5, pct:1, atr:1.5; `pdh_breakout`: level, pct:...; `orb_fade` and `vwap_reclaim`: setup, pct:...); targets `1R,1.5R,2R,3R`; `--ranges 15,30` tries opening-range lengths for orb and orb_fade; `--shorts` adds short trades; train 60%; a variation needs at least `--min-trades 10` train trades to be ranked. Uses the same fill model, slippage and charges as `groww-backtest`.
+
+Data: more history makes the verdict stronger. `fetch --days 365` asks Groww for a year in 30-day windows and keeps whatever exists (it reports how far back it got). `--source csv` reuses the cache. For multi-day trades use `groww-swing` instead.
 
 ## Output
 

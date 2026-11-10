@@ -34,9 +34,10 @@
     "sebi_pct": 0.0001,
     "gst_pct": 18,
     "intraday": {"stt_sell_pct": 0.025, "stt_buy_pct": 0.0, "stamp_buy_pct": 0.003},
-    "delivery": {"stt_sell_pct": 0.1, "stt_buy_pct": 0.1, "stamp_buy_pct": 0.015}
+    "delivery": {"stt_sell_pct": 0.1, "stt_buy_pct": 0.1, "stamp_buy_pct": 0.015, "dp_per_sell": 20}
   },
   "slippage_pct": 0.03,
+  "fills": {"entry": "open", "target_trade_through_ticks": 1, "stop_extra_slippage_pct": 0.05},
   "paper_trading": {
     "max_signal_age_min": 10
   }

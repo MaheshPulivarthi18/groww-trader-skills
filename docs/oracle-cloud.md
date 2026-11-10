@@ -105,8 +105,11 @@ crontab -e
 ```
 
 ```
-55 8 * * 1-5 cd $HOME/trading && . $HOME/.groww_env && $HOME/venv/bin/python $HOME/groww-trader-skills/gtrade.py paper run >> $HOME/trading/paper.log 2>&1
+55 8 * * 1-5 cd $HOME/trading && . $HOME/.groww_env && $HOME/venv/bin/python $HOME/groww-trader-skills/gtrade.py paper run >> $HOME/trading/cron.log 2>&1
+*/10 9-15 * * 1-5 cd $HOME/trading && . $HOME/.groww_env && $HOME/venv/bin/python $HOME/groww-trader-skills/gtrade.py paper run >> $HOME/trading/cron.log 2>&1
 ```
+
+The second line is the safety net. Only one copy can run (a lock), so every 10 minutes it either does nothing (bot running, or the day already finished), restarts a bot that crashed (with a Telegram "restarted" message), or, if the bot is alive but hasn't completed a step for 15 minutes, sends a "may be stuck" alert. The bot writes its own daily log to `~/trading/trader/logs/paper-YYYY-MM-DD.log` and deletes logs older than 30 days; `cron.log` only catches crashes.
 
 Then `sudo systemctl restart cron` (cron reads the timezone at start), and test the exact command in cron's bare environment:
 
@@ -114,7 +117,9 @@ Then `sudo systemctl restart cron` (cron reads the timezone at start), and test 
 env -i HOME=$HOME sh -c 'cd $HOME/trading && . $HOME/.groww_env && $HOME/venv/bin/python $HOME/groww-trader-skills/gtrade.py paper once'
 ```
 
-Watch it: `tail -f ~/trading/paper.log`.
+Watch it: `tail -f ~/trading/trader/logs/paper-$(date +%F).log`.
+
+One thing the server can't report is its own death (VM stopped, reclaimed or out of network): then nothing runs and nothing alerts. Check the MongoDB heartbeat from elsewhere, e.g. ask Claude "is the bot running?" with the `groww-review` skill, or a scheduled check that does the same.
 
 ## 10. Keep the VM
 

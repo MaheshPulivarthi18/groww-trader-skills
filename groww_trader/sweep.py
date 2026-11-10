@@ -23,7 +23,10 @@ from .market import Candle, by_session
 STOPS_FOR = {
     "orb": ("or_mid", "or_low", "pct:0.5", "pct:1", "atr:1.5"),
     "pdh_breakout": ("level", "pct:0.5", "pct:1", "atr:1.5"),
+    "orb_fade": ("setup", "pct:0.5", "pct:1", "atr:1.5"),
+    "vwap_reclaim": ("setup", "pct:0.5", "pct:1", "atr:1.5"),
 }
+RANGE_SETUPS = ("orb", "orb_fade")
 
 
 def split_day(candles_by_symbol: Dict[str, List[Candle]], train_frac: float) -> date:
@@ -40,7 +43,7 @@ def variants(setups: Iterable[str], stops: Optional[List[str]], targets: List[st
     for setup in setups:
         allowed = STOPS_FOR.get(setup, ())
         use_stops = [s for s in (stops or allowed) if s in allowed or s.startswith(("pct:", "atr:"))]
-        use_ranges = ranges if (setup == "orb" and ranges) else [None]
+        use_ranges = ranges if (setup in RANGE_SETUPS and ranges) else [None]
         for stop, target, rng in itertools.product(use_stops, targets, use_ranges):
             out.append({"setup": setup, "stop": stop, "target": target, "range_min": rng})
     return out
@@ -100,7 +103,8 @@ def sweep(candles_by_symbol: Dict[str, List[Candle]], cfg: Dict[str, Any], inter
     }
 
 
-def verdict(best: Optional[Dict[str, Any]], held_up: int, shown: int) -> str:
+def verdict(best: Optional[Dict[str, Any]], held_up: int, shown: int,
+            next_step: str = "Worth paper trading for 2-3 weeks.") -> str:
     if not best:
         return "No variation produced enough trades on the train period to judge."
     tr, te = best["train"], best["test"]
@@ -113,4 +117,4 @@ def verdict(best: Optional[Dict[str, Any]], held_up: int, shown: int) -> str:
         return ("The pick made money on the train period but LOST on the unseen test period: "
                 "most likely luck. Don't paper trade it on this evidence.")
     return (f"The pick made money on both periods ({held_up} of the top {shown} held up on test). "
-            "Worth paper trading for 2-3 weeks. Still not proof: markets change.")
+            f"{next_step} Still not proof: markets change.")

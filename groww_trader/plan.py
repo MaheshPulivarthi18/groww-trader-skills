@@ -29,6 +29,10 @@ def stop_price(signal: Dict[str, Any], rule: str, bars: Optional[List[Candle]] =
         s = signal.get("pdh" if long else "pdl")
         if s is None:
             raise ValueError("stop 'level' needs a pdh_breakout signal")
+    elif rule == "setup":  # the setup's own invalidation level (orb_fade, vwap_reclaim)
+        s = signal.get("setup_stop")
+        if s is None:
+            raise ValueError(f"stop 'setup' needs a setup that defines one (orb_fade, vwap_reclaim)")
     elif rule.startswith("pct:"):
         p = float(rule[4:]) / 100
         s = entry * (1 - p) if long else entry * (1 + p)

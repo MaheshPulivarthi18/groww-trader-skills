@@ -21,7 +21,8 @@ Inspired by the design of [day-trader-skill](https://github.com/jakeschincariol/
 | `groww-budget` | quantity so the loss at the stop, after charges, fits your limit | `trader/orders.json` |
 | `groww-risk` | PASS or BLOCK every ticket against your rules | `trader/orders.json` |
 | `groww-backtest` | replay one rule over past sessions after slippage and charges | `trader/backtest.json` |
-| `groww-sweep` | try many rule variations; choose on older data, judge on newer unseen data | `trader/sweep.json` |
+| `groww-sweep` | try many intraday rule variations; choose on older data, judge on newer unseen data | `trader/sweep.json` |
+| `groww-swing` | the same honest search for multi-day (delivery) breakout rules on daily candles | `trader/swing.json` |
 | `groww-paper` | run the whole pipeline on live data and record simulated trades; never sends orders | `trader/journal.json` |
 | `groww-review` | answer questions and build dashboards from the optional MongoDB mirror | reads only |
 
@@ -91,9 +92,26 @@ Trying 50 variations and keeping the best one almost always finds something that
 
 ```
 python3 gtrade.py sweep --setups orb --targets 1.5R,2R,3R --ranges 15,30 --source csv
+python3 gtrade.py sweep --setups orb_fade,vwap_reclaim --shorts --source csv
 ```
 
 It prints how many variations were tried, how many made money on the train period, the top five with their unseen-period results beside them, and a plain verdict. Judge by the test column.
+
+Intraday setups: `orb` (opening-range breakout), `pdh_breakout` (previous-day high/low), `orb_fade` (a failed opening-range breakout, traded in reverse) and `vwap_reclaim` (price recovers the session VWAP after several bars away). `--shorts` adds short trades (intraday only).
+
+More history makes every conclusion stronger: `python3 gtrade.py fetch --days 365` asks Groww for a year in 30-day windows, keeps whatever exists, and reports how far back it got and how many old windows Groww refused.
+
+### Swing (multi-day, delivery)
+
+Daily candles, held for days, longs only, with delivery charges (STT 0.1% both sides, stamp duty, DP charge on the sell):
+
+```
+python3 gtrade.py fetch --interval 1440 --days 1100        # ~3 years of daily candles
+python3 gtrade.py swing --source csv                       # 72 variations, train/test split
+python3 gtrade.py swing --lookbacks 20 --stops pct:5 --targets 3R --holds 20 --trends 50 --source csv
+```
+
+Rule: close above the highest high of the last N days (optionally only above an N-day average), buy next day's open; exit at the stop, the target, or after the holding period.
 
 ## Paper trading
 
@@ -104,7 +122,9 @@ python3 gtrade.py paper replay --date 2026-11-09   # rehearse a past session off
 python3 gtrade.py pause | resume     # stop / allow NEW positions; open ones are always managed
 ```
 
-Each bar it scans, plans, sizes and risk-checks new triggers, fills them at the next bar's open plus slippage, and exits on stop, target or flat-by, with the same code as the backtest so the two compare directly. It only reads data, so it doesn't need a static IP. After the first step it fetches only today's new bars. Stopping and restarting is safe: everything is in `trader/journal.json`. Run it for a few weeks before reading anything into the results; real fills are usually a little worse than paper ones.
+Each bar it scans, plans, sizes and risk-checks new triggers, fills them at the next bar's open plus slippage, and exits on stop, target or flat-by, with the same code as the backtest so the two compare directly. It only reads data, so it doesn't need a static IP. After the first step it fetches only today's new bars. Run it for a few weeks before reading anything into the results; real fills are usually a little worse than paper ones.
+
+**Unattended:** only one copy can run at a time (a lock), so cron can start it every 10 minutes as a safety net: it's a no-op while the bot runs or after the day is done, restarts a crashed bot (and says so on Telegram), and alerts if a running bot hasn't completed a step for 15 minutes. Logs go to `trader/logs/paper-YYYY-MM-DD.log`, kept 30 days. See [docs/oracle-cloud.md](docs/oracle-cloud.md) for the cron lines.
 
 ## Optional: Telegram alerts and remote pause
 
@@ -138,11 +158,12 @@ After that, `paper run` / `paper once` sync every bar and `backtest --write` sav
 - `setups`: **only the setups you list run**, each filled in from its defaults. A setup can carry its own `exit` block, e.g. `"pdh_breakout": {"exit": {"stop": "level"}}` (that one is the default), so ORB and PDH can run together with suitable stops.
 - `exit`: global `stop` (`or_mid`, `or_low`, `level`, `pct:0.8`, `atr:1.5`), `target` (`1.5R`), `flat_by` (keep this before Groww's intraday auto square-off)
 - `risk`: max loss per trade, daily loss limit, trades per day, open positions, **one position per stock**, min reward:risk, max position %, entry window
-- `charges`: percentage rates following [Groww's pricing](https://groww.in/pricing/stocks) as of Nov 2026 (brokerage 0.1% capped at ₹20 per order, min ₹5). Re-check them. DP charges and API subscription fees are not included.
+- `charges`: percentage rates following [Groww's pricing](https://groww.in/pricing/stocks) as of Nov 2026 (brokerage 0.1% capped at ₹20 per order, min ₹5; delivery sells add a ₹20 DP charge plus GST). Re-check them. API subscription fees are not included.
+- `fills`: how strict simulated fills are. Defaults: entry at the next bar's open plus slippage; a target (limit order) fills only if price trades a tick beyond it; stops (market orders) get 0.05% extra slippage. `"entry": "mid"` is a harsher stress test.
 
 ## Backtest fill model
 
-Conservative on purpose: entry at the next bar's open plus slippage; if a bar touches both stop and target, the stop wins; gaps through the stop fill at the open; anything open at `flat_by` exits there; full charges every trade. The `outlook` resamples past trades 10,000 times (seeded) to show a range for the next 20 trades. It's history, not a forecast.
+Conservative on purpose: entry at the next bar's open plus slippage; targets need price to trade a tick beyond them (a touch isn't a fill) and fill without slippage; stops pay extra slippage; if a bar reaches both stop and target, the stop wins; gaps through the stop fill at the open; anything open at `flat_by` exits there; full charges every trade. The `outlook` resamples past trades 10,000 times (seeded) to show a range for the next 20 trades. It's history, not a forecast.
 
 ## Tests
 
@@ -150,7 +171,7 @@ Conservative on purpose: entry at the next bar's open plus slippage; if a bar to
 python3 -m unittest discover -s tests -v
 ```
 
-Offline, on synthetic candles (not real market data). They pin the charge math, setup triggers, per-setup exits, sizing, the risk gate, the backtest fill model, the sweep's train/test separation, paper trading (no peeking at unfinished bars, restart-safe, identical to the backtest, pause behaviour), Telegram command handling and the MongoDB mirror's failure path.
+Offline, on synthetic candles (not real market data). They pin the charge math (intraday and delivery), every setup's triggers, per-setup exits, sizing, the risk gate, the fill model, the sweep's train/test separation, swing entries and exits, paper trading (no peeking at unfinished bars, restart-safe, identical to the backtest, pause behaviour), the single-instance lock, restart and stuck detection, long fetches with missing old windows, Telegram command handling and the MongoDB mirror's failure path.
 
 ## Fine print
 
@@ -163,7 +184,8 @@ Offline, on synthetic candles (not real market data). They pin the charge math, 
 ## Roadmap
 
 - `groww-broker`: live orders via `growwapi`, only after a rule survives sweep and weeks of paper trading; risk PASS and an explicit yes per order; from a static IP registered with Groww
-- More setups (VWAP reclaim, gap-and-go) and delivery (CNC) swing backtests
+- Swing paper trading (the paper engine is intraday only today)
+- More setups (gap-and-go, index-relative strength)
 - `groww-news`: NSE/BSE corporate announcements for the watchlist
 
 Contributions welcome. Keep the rules: no order without a PASS and a yes, paper by default, keys out of code.

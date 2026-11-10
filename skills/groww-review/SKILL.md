@@ -21,7 +21,7 @@ Times: `day` strings and `time` are IST; `at`/`saved_at` are UTC datetimes.
 
 ## Common questions
 
-- **"Is the bot running?"** `health` `bot`: if `at` is more than ~10 minutes old during market hours (09:15-15:30 IST, weekdays), say it looks stopped and suggest checking `~/trading/paper.log` on the server.
+- **"Is the bot running?"** `health` `bot`: if `at` is more than ~10 minutes old during market hours (09:15-15:30 IST, weekdays), say it looks stopped and suggest checking `~/trading/trader/logs/paper-YYYY-MM-DD.log` and `~/trading/cron.log` on the server. (The server's own cron restarts a crashed bot every 10 minutes, so a stale heartbeat usually means the VM itself is down or offline.)
 - **"How did today / this week go?"** `daily` for the days; list `journal` entries with `status: "closed"` for detail.
 - **"Why was X blocked?"** `journal` with that symbol and `status: "blocked"`: quote `risk_reasons` exactly.
 - **Missed ideas** mean the bot saw a trigger too late (usually started late or was down), not a bad trade.

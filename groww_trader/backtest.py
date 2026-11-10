@@ -1,12 +1,16 @@
 """Replay a setup + exit plan over past sessions, after Indian charges.
 
-Fill model (deliberately conservative):
+Fill model (deliberately conservative; config "fills"):
   * entry at the OPEN of the bar after the trigger bar, plus slippage
-  * stop and target are the planned price levels
-  * if a bar touches both stop and target, the stop is assumed hit first
-  * a gap through the stop fills at the bar's open, not at the stop
-  * anything still open at flat_by exits at that bar's open
-  * slippage is applied against you on both sides
+    (fills.entry = "mid": halfway from that open to the bar's adverse
+    extreme, a stress test for slow reactions)
+  * targets are limit orders: they fill only if price trades at least
+    fills.target_trade_through_ticks beyond the target (a touch isn't
+    enough), at the target or a better gap open, without slippage
+  * stops are market orders: normal slippage plus
+    fills.stop_extra_slippage_pct; a gap through the stop fills at the open
+  * if a bar reaches both stop and target, the stop is assumed hit first
+  * anything still open at flat_by exits at that bar's open, with slippage
 
 It is a historical replay, not a prediction.
 """
@@ -27,8 +31,37 @@ from .setups import detect
 from .sizing import size
 
 
+TICK = 0.05
+
+FILL_DEFAULTS = {"entry": "open", "target_trade_through_ticks": 1, "stop_extra_slippage_pct": 0.05}
+
+
+def fill_params(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    return {**FILL_DEFAULTS, **(cfg.get("fills") or {})}
+
+
+def entry_price(bar: Candle, side: str, cfg: Dict[str, Any]) -> float:
+    f = fill_params(cfg)
+    slip = cfg.get("slippage_pct", 0.0) / 100
+    base = bar.open
+    if f["entry"] == "mid":
+        base = (bar.open + bar.high) / 2 if side == "BUY" else (bar.open + bar.low) / 2
+    return slipped(base, side, "entry", slip)
+
+
+def exit_price(px: float, reason: str, side: str, cfg: Dict[str, Any]) -> float:
+    f = fill_params(cfg)
+    slip = cfg.get("slippage_pct", 0.0) / 100
+    if reason == "target":
+        return round(px, 2)  # limit order
+    if reason == "stop":
+        return slipped(px, side, "exit", slip + f["stop_extra_slippage_pct"] / 100)
+    return slipped(px, side, "exit", slip)
+
+
 def walk_exit(side: str, stop: float, target: float, flat: datetime, bars: List[Candle],
-              start_idx: int, interval_min: int, until: Optional[datetime] = None):
+              start_idx: int, interval_min: int, until: Optional[datetime] = None,
+              through: float = 0.0):
     """Walk bars from `start_idx` and return (raw_exit_price, reason, bar_ts) for
     the first stop / target / flat-by hit, or None if nothing has hit yet.
 
@@ -47,12 +80,12 @@ def walk_exit(side: str, stop: float, target: float, flat: datetime, bars: List[
         if long:
             if b.low <= stop:
                 return (b.open if b.open < stop else stop), "stop", b.ts
-            if b.high >= target:
+            if b.high >= target + through:
                 return (b.open if b.open > target else target), "target", b.ts
         else:
             if b.high >= stop:
                 return (b.open if b.open > stop else stop), "stop", b.ts
-            if b.low <= target:
+            if b.low <= target - through:
                 return (b.open if b.open < target else target), "target", b.ts
     return None
 
@@ -63,7 +96,7 @@ def slipped(price: float, side: str, leg: str, slip: float) -> float:
     return round(price * (1 + slip if buying else 1 - slip), 2)
 
 
-def _simulate(order: Dict[str, Any], bars: List[Candle], start_idx: int, slip: float,
+def _simulate(order: Dict[str, Any], bars: List[Candle], start_idx: int, cfg: Dict[str, Any],
               interval_min: int) -> Optional[Dict[str, Any]]:
     if start_idx >= len(bars):
         return None
@@ -71,12 +104,14 @@ def _simulate(order: Dict[str, Any], bars: List[Candle], start_idx: int, slip: f
     first = bars[start_idx]
     if first.ts >= flat:
         return None
-    entry = slipped(first.open, order["side"], "entry", slip)
-    hit = walk_exit(order["side"], order["stop"], order["target"], flat, bars, start_idx, interval_min)
+    entry = entry_price(first, order["side"], cfg)
+    through = fill_params(cfg)["target_trade_through_ticks"] * TICK
+    hit = walk_exit(order["side"], order["stop"], order["target"], flat, bars, start_idx, interval_min,
+                    through=through)
     if hit is None:
         hit = (bars[-1].close, "session_end", bars[-1].ts)
     px, reason, ts = hit
-    return {"fill_entry": entry, "fill_exit": slipped(px, order["side"], "exit", slip),
+    return {"fill_entry": entry, "fill_exit": exit_price(px, reason, order["side"], cfg),
             "exit_reason": reason, "exit_time": ts.isoformat()}
 
 
@@ -117,7 +152,7 @@ def run(symbol: str, candles: List[Candle], setup: str, cfg: Dict[str, Any], int
         if order["qty"] <= 0:
             status_counts["too_small"] = status_counts.get("too_small", 0) + 1
             continue
-        sim = _simulate(order, bars, idx + 1, slip, interval_min)
+        sim = _simulate(order, bars, idx + 1, cfg, interval_min)
         if sim is None:
             status_counts["no_fill"] = status_counts.get("no_fill", 0) + 1
             continue

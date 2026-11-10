@@ -2,7 +2,8 @@
 
 Rates come from config["charges"] and are percentages of turnover. The
 defaults are typical NSE equity rates, not a quote: verify against your
-broker's pricing page. DP charges on delivery sells and any platform or
+broker's pricing page. Delivery sells include a DP charge (charges.delivery
+.dp_per_sell, Groww: Rs 3.5 depository + Rs 16.5 Groww, plus GST). Platform or
 API subscription fees are not included.
 """
 
@@ -35,14 +36,17 @@ def round_trip(buy_price: float, sell_price: float, qty: int,
     exch = turnover * charges["exchange_txn_pct"] / 100
     sebi = turnover * charges["sebi_pct"] / 100
     stamp = buy_v * leg["stamp_buy_pct"] / 100
-    gst = (brokerage + exch + sebi) * charges["gst_pct"] / 100
-    total = brokerage + stt + exch + sebi + stamp + gst
+    # Delivery sells also pay a depository (DP) charge per sell, GST on top.
+    dp = float(leg.get("dp_per_sell", 0)) if product.upper() != "MIS" and sell_v > 0 else 0.0
+    gst = (brokerage + exch + sebi + dp) * charges["gst_pct"] / 100
+    total = brokerage + stt + exch + sebi + stamp + dp + gst
     return {
         "brokerage": round(brokerage, 2),
         "stt": round(stt, 2),
         "exchange": round(exch, 2),
         "sebi": round(sebi, 2),
         "stamp": round(stamp, 2),
+        "dp": round(dp, 2),
         "gst": round(gst, 2),
         "total": round(total, 2),
     }

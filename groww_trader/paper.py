@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from .backtest import slipped, stats, walk_exit
+from .backtest import TICK, entry_price, exit_price, fill_params, stats, walk_exit
 from .config import exit_rules
 from .costs import net_pnl
 from .market import IST, MARKET_CLOSE, MARKET_OPEN, Candle, by_session, parse_ts
@@ -134,7 +134,7 @@ def step(cfg: Dict[str, Any], data: Dict[str, List[Candle]], now: datetime, jour
                 events.append(f"CANCEL  {_fmt(e)}: next bar at/after flat-by")
                 continue
             e.update(status="open", entry_time=nxt.ts.isoformat(),
-                     fill_entry=slipped(nxt.open, e["side"], "entry", slip))
+                     fill_entry=entry_price(nxt, e["side"], cfg))
             events.append(f"FILLED  {_fmt(e)} x{e['qty']} @ ₹{e['fill_entry']} ({nxt.ts:%H:%M})")
 
         if e["status"] == "open":
@@ -142,13 +142,14 @@ def step(cfg: Dict[str, Any], data: Dict[str, List[Candle]], now: datetime, jour
             idx = next((i for i, b in enumerate(today) if b.ts == et), None)
             if idx is None:
                 continue
-            hit = walk_exit(e["side"], e["stop"], e["target"], flat, today, idx, interval_min, until=now)
+            hit = walk_exit(e["side"], e["stop"], e["target"], flat, today, idx, interval_min, until=now,
+                            through=fill_params(cfg)["target_trade_through_ticks"] * TICK)
             if hit is None and now >= close_dt and today:
                 hit = (today[-1].close, "session_end", today[-1].ts)
             if hit is None:
                 continue
             px, reason, ts = hit
-            fill_exit = slipped(px, e["side"], "exit", slip)
+            fill_exit = exit_price(px, reason, e["side"], cfg)
             pnl = net_pnl(e["side"], e["fill_entry"], fill_exit, e["qty"], cfg["charges"], product)
             risk_amt = e["risk_per_share"] * e["qty"]
             e.update(status="closed", fill_exit=fill_exit, exit_reason=reason, exit_time=ts.isoformat(),

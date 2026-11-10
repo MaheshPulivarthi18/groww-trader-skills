@@ -11,6 +11,7 @@
   python3 gtrade.py show                                orders in plain words
   python3 gtrade.py backtest SBIN --setup orb --write   replay past sessions -> trader/backtest.json
   python3 gtrade.py sweep --source csv                  many rule variations, judged on unseen data
+  python3 gtrade.py swing --source csv                  multi-day (delivery) rules on daily candles
   python3 gtrade.py paper run | once | report | replay  paper trading on live data (simulated fills)
   python3 gtrade.py pause | resume                      stop / allow new paper positions
   python3 gtrade.py telegram setup | test               optional Telegram alerts and commands
@@ -83,8 +84,17 @@ def cmd_fetch(args, cfg):
     for s in symbols_arg(args, cfg):
         try:
             c = get_candles(src, s, args.interval, args.days)
+            p = csv_path(s, args.interval)
+            cached = load_csv(p) if p.exists() else []
             res[s] = {"candles": len(c), "rows_from_groww": getattr(src, "raw_rows", None),
-                      "file": str(csv_path(s, args.interval))}
+                      "first_day": str(c[0].ts.date()) if c else None,
+                      "last_day": str(c[-1].ts.date()) if c else None,
+                      "cached_from": str(cached[0].ts.date()) if cached else None,
+                      "file": str(p)}
+            failed = getattr(src, "failed_windows", [])
+            if failed:
+                res[s]["failed_windows"] = len(failed)
+                res[s]["first_failure"] = failed[0]
         except Exception as e:  # keep going across symbols
             res[s] = {"error": str(e)}
     out(res)
@@ -195,9 +205,11 @@ def cmd_backtest(args, cfg):
     src = get_source(args.source, cfg["exchange"])
     symbol = args.symbol.upper()
     override_exit(cfg, args.setup, args.stop, args.target)
+    if args.shorts:
+        cfg["allow_short"] = True
     candles = get_candles(src, symbol, interval, args.days)
     res = bt.run(symbol, candles, args.setup, cfg, interval)
-    res["rules"] = {"setup": args.setup, **exit_rules(cfg, args.setup),
+    res["rules"] = {"setup": args.setup, "shorts": bool(cfg.get("allow_short")), **exit_rules(cfg, args.setup),
                     "setup_params": setup_params(cfg, args.setup)}
     res["outlook"] = bt.bootstrap(res["trades"], next_n=args.next)
     if args.write:
@@ -273,7 +285,7 @@ def cmd_paper(args, cfg):
     src = get_source(args.source, cfg["exchange"])
     if not cfg.get("paper", True):
         print("note: config has paper=false, but this command only ever simulates. No orders are sent.")
-    from groww_trader import notify
+    from groww_trader import notify, runner
     tg = notify.Telegram()
     seen_errors = set()  # (day, symbol, error): alert each data problem once a day
 
@@ -283,6 +295,7 @@ def cmd_paper(args, cfg):
         paused = notify.is_paused()
         journal, events = paper.step(cfg, data, now, journal, interval, paused=paused)
         write_json("journal.json", journal)
+        runner.mark_step(now)
         status = _paper_status(journal, now.date()) + (" [PAUSED]" if paused else "")
         for ev in events:
             print(f"[{now:%H:%M}] {ev}", flush=True)
@@ -320,29 +333,57 @@ def cmd_paper(args, cfg):
             for reply in notify.handle(tg.poll(), status_text, report_text):
                 tg.send(reply)
 
-    if args.action == "once":
-        now = datetime.fromisoformat(args.now).replace(tzinfo=IST) if args.now else now_ist()
-        serve_commands()
-        one_step(now)
+    lock = runner.Lock("paper")
+    if not lock.acquire():
+        # Another copy is running (e.g. cron's). Don't touch the journal; just
+        # check it isn't stuck.
+        now = now_ist()
+        msg = runner.alert_if_stuck(now, tg.send if tg.enabled else (lambda m: None))
+        print(msg or "A paper run is already active; nothing to do.")
         return
 
-    # run: loop until the close
-    print(f"Paper trading {', '.join(symbols)} on {interval}-minute bars. No orders are sent. Ctrl+C to stop.")
+    if args.action == "once":
+        now = datetime.fromisoformat(args.now).replace(tzinfo=IST) if args.now else now_ist()
+        try:
+            serve_commands()
+            one_step(now)
+        finally:
+            lock.release()
+        return
+
+    # run: loop until the close. Safe to start repeatedly from cron.
+    now = now_ist()
+    if now.weekday() >= 5:
+        print("Market closed (weekend).")
+        lock.release()
+        return
+    if runner.is_done(now) and not args.force:
+        print("Today's paper run already finished. Use --force to run again.")
+        lock.release()
+        return
+    log_path = runner.daily_log(now) if not args.no_log else None
+    st = runner.mark_start(now)
+    print(f"[{now:%H:%M}] Paper trading {', '.join(symbols)} on {interval}-minute bars. "
+          f"No orders are sent.{' (restart)' if st['restart'] else ''}", flush=True)
     if tg.enabled:
-        tg.send(f"Paper trading started: {', '.join(symbols)} ({interval}-min bars)."
-                + (" Currently PAUSED, /resume to allow new positions." if notify.is_paused() else "")
-                + " /help for commands.")
+        if st["restart"]:
+            last = st.get("last_step")
+            tg.send(f"Paper bot RESTARTED at {now:%H:%M} after stopping unexpectedly"
+                    + (f" (last completed step {last[11:16]})." if last else ".")
+                    + " Any trigger it missed while down is recorded as missed.")
+        else:
+            tg.send(f"Paper trading started: {', '.join(symbols)} ({interval}-min bars)."
+                    + (" Currently PAUSED, /resume to allow new positions." if notify.is_paused() else "")
+                    + " /help for commands.")
     from groww_trader.market import MARKET_CLOSE
     try:
         while True:
             now = now_ist()
             close = datetime.combine(now.date(), MARKET_CLOSE, tzinfo=IST)
-            if now.weekday() >= 5:
-                print("Market closed (weekend).")
-                break
             if now > close + timedelta(minutes=10):
                 one_step(close + timedelta(minutes=1))
                 out(paper.report(read_json("journal.json", []), day=str(now.date())))
+                runner.mark_done(now)
                 if tg.enabled:
                     tg.send("Market closed. " + report_text(str(now.date())))
                 break
@@ -360,6 +401,11 @@ def cmd_paper(args, cfg):
                 time.sleep(min(20.0, max(1.0, left)))
     except KeyboardInterrupt:
         print("\nStopped. Journal is saved in trader/journal.json; run again to resume.")
+    finally:
+        lock.release()
+        if log_path and sys.stdout is not sys.__stdout__:
+            sys.stdout.flush()
+            sys.stdout = sys.__stdout__
 
 
 def cmd_pause(args, cfg):
@@ -395,6 +441,9 @@ def cmd_telegram(args, cfg):
 def cmd_sweep(args, cfg):
     from groww_trader import sweep as sw
 
+    if args.shorts:
+        cfg["allow_short"] = True
+
     interval = args.interval or cfg["interval_min"]
     src = get_source(args.source, cfg["exchange"])
     data, errors = {}, {}
@@ -406,7 +455,7 @@ def cmd_sweep(args, cfg):
     if not data:
         sys.exit(f"error: no data for any symbol: {errors}")
     split = lambda x: [p.strip() for p in x.split(",") if p.strip()] if x else None
-    vs = sw.variants(split(args.setups) or ["orb", "pdh_breakout"], split(args.stops),
+    vs = sw.variants(split(args.setups) or list(SETUPS), split(args.stops),
                      split(args.targets) or ["1R", "1.5R", "2R", "3R"],
                      [int(r) for r in split(args.ranges)] if args.ranges else None)
     try:
@@ -421,7 +470,8 @@ def cmd_sweep(args, cfg):
         return
 
     sp = res["split"]
-    print(f"Sweep: {res['variants_tested']} rule variations x {len(res['symbols'])} symbols, after charges")
+    print(f"Sweep: {res['variants_tested']} rule variations x {len(res['symbols'])} symbols, after charges"
+          f"{', longs and shorts' if cfg.get('allow_short') else ', longs only'}")
     print(f"Train (choose): up to {sp['train_until']}   Test (unseen): from {sp['test_from']}")
     print(f"{res['profitable_on_train']} of {res['eligible']} variations with >= {res['min_trades']} train trades "
           f"made money on train.\n")
@@ -432,6 +482,52 @@ def cmd_sweep(args, cfg):
         v = r["rule"]
         name = f"{v['setup']} stop={v['stop']} tgt={v['target']}" + (f" rng={v['range_min']}" if v.get("range_min") else "")
         print(f"{name:38} {r['train']['trades']:>12} {r['train']['net_total']:>11.0f} "
+              f"{r['test']['trades']:>11} {r['test']['net_total']:>10.0f}")
+    print(f"\nVerdict: {res['verdict']}")
+    if errors:
+        print(f"Data errors: {errors}")
+
+
+def cmd_swing(args, cfg):
+    from groww_trader import swing
+
+    src = get_source(args.source, cfg["exchange"])
+    data, errors = {}, {}
+    for s in symbols_arg(args, cfg):
+        try:
+            data[s] = get_candles(src, s, 1440, args.days)
+        except Exception as e:
+            errors[s] = str(e)
+    if not data:
+        sys.exit(f"error: no daily data for any symbol: {errors}\n"
+                 "Fetch it first: gtrade.py fetch --interval 1440 --days 1100")
+    lst = lambda x, conv=str: [conv(p.strip()) for p in x.split(",") if p.strip()]
+    rules = swing.grid(lst(args.lookbacks, int), lst(args.stops), lst(args.targets),
+                       lst(args.holds, int), lst(args.trends, int))
+    try:
+        res = swing.sweep(data, cfg, rules, train_frac=args.train, min_trades=args.min_trades, top=args.top)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+    res["data_errors"] = errors
+    if args.write:
+        write_json("swing.json", res)
+    if args.json:
+        out(res if args.all else {k: v for k, v in res.items() if k != "all"})
+        return
+    sp = res["split"]
+    print(f"Swing sweep (daily candles, delivery, longs): {res['variants_tested']} rule variations x "
+          f"{len(res['symbols'])} symbols, after delivery charges")
+    print(f"Train (choose): up to {sp['train_until']}   Test (unseen): from {sp['test_from']}")
+    print(f"{res['profitable_on_train']} of {res['eligible']} variations with >= {res['min_trades']} train trades "
+          f"made money on train.\n")
+    head = f"{'rule':44} {'train trades':>12} {'train net':>11} {'test trades':>11} {'test net':>10}"
+    print(head)
+    print("-" * len(head))
+    for r in res["top"]:
+        v = r["rule"]
+        name = f"hi{v['lookback']} stop={v['stop']} tgt={v['target']} hold={v['hold']}d" + \
+            (f" sma{v['trend']}" if v["trend"] else "")
+        print(f"{name:44} {r['train']['trades']:>12} {r['train']['net_total']:>11.0f} "
               f"{r['test']['trades']:>11} {r['test']['net_total']:>10.0f}")
     print(f"\nVerdict: {res['verdict']}")
     if errors:
@@ -494,6 +590,7 @@ def main(argv=None):
     p.add_argument("--target")
     p.add_argument("--next", type=int, default=20, help="trades to project in the outlook")
     p.add_argument("--trades", action="store_true", help="include every trade in the output")
+    p.add_argument("--shorts", action="store_true", help="also take short trades (intraday MIS only)")
     p.add_argument("--write", action="store_true")
     p = sub.add_parser("paper", help="simulated trading on live data; never sends orders")
     p.set_defaults(fn=cmd_paper)
@@ -505,19 +602,35 @@ def main(argv=None):
     p.add_argument("--now", help="once: YYYY-MM-DDTHH:MM, step as of this IST time")
     p.add_argument("--replay", action="store_true", help="report on replay journal")
     p.add_argument("--write", action="store_true", help="replay: save to trader/journal_replay.json")
+    p.add_argument("--force", action="store_true", help="run: start even if today's run already finished")
+    p.add_argument("--no-log", action="store_true", help="run: print to the terminal only, no daily log file")
     p = add("sweep", cmd_sweep, symbols=True)
-    p.add_argument("--setups", help="comma list, default orb,pdh_breakout")
+    p.add_argument("--setups", help="comma list, default: all setups")
     p.add_argument("--stops", help="comma list, default: every stop that suits each setup")
     p.add_argument("--targets", help="comma list, default 1R,1.5R,2R,3R")
-    p.add_argument("--ranges", help="ORB opening-range minutes to try, e.g. 15,30")
+    p.add_argument("--ranges", help="opening-range minutes to try for orb/orb_fade, e.g. 15,30")
     p.add_argument("--interval", type=int)
     p.add_argument("--days", type=int, default=60)
     p.add_argument("--train", type=float, default=0.6, help="fraction of sessions used to choose (default 0.6)")
     p.add_argument("--min-trades", type=int, default=10)
+    p.add_argument("--shorts", action="store_true", help="also take short trades (intraday MIS only)")
     p.add_argument("--top", type=int, default=5)
     p.add_argument("--json", action="store_true")
     p.add_argument("--all", action="store_true", help="with --json, include every variation")
     p.add_argument("--write", action="store_true", help="save to trader/sweep.json")
+    p = add("swing", cmd_swing, symbols=True)
+    p.add_argument("--lookbacks", default="20,55", help="N-day high to break (comma list)")
+    p.add_argument("--stops", default="pct:3,pct:5,atr:2")
+    p.add_argument("--targets", default="2R,3R,none")
+    p.add_argument("--holds", default="10,20", help="max days in a trade")
+    p.add_argument("--trends", default="0,50", help="only buy above this SMA; 0 = no filter")
+    p.add_argument("--days", type=int, default=1100, help="calendar days of daily candles to use")
+    p.add_argument("--train", type=float, default=0.6)
+    p.add_argument("--min-trades", type=int, default=8)
+    p.add_argument("--top", type=int, default=5)
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--all", action="store_true")
+    p.add_argument("--write", action="store_true", help="save to trader/swing.json")
     for name in ("pause", "resume"):
         p = sub.add_parser(name, help=f"{name} new paper positions (open ones are always managed)")
         p.set_defaults(fn=cmd_pause)

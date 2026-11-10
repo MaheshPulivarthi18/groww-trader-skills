@@ -54,9 +54,14 @@ DEFAULTS: Dict[str, Any] = {
         "sebi_pct": 0.0001,
         "gst_pct": 18,
         "intraday": {"stt_sell_pct": 0.025, "stt_buy_pct": 0.0, "stamp_buy_pct": 0.003},
-        "delivery": {"stt_sell_pct": 0.1, "stt_buy_pct": 0.1, "stamp_buy_pct": 0.015},
+        "delivery": {"stt_sell_pct": 0.1, "stt_buy_pct": 0.1, "stamp_buy_pct": 0.015, "dp_per_sell": 20},
     },
     "slippage_pct": 0.03,      # per side, applied in backtests and paper trading
+    "fills": {
+        "entry": "open",                    # "open" or "mid" (stress test: halfway to the bar's worst price)
+        "target_trade_through_ticks": 1,    # a target (limit order) fills only if price trades beyond it
+        "stop_extra_slippage_pct": 0.05,    # stops are market orders: extra slippage on top
+    },
     "paper_trading": {
         "max_signal_age_min": 10,  # ignore triggers older than this when first seen
     },
@@ -85,7 +90,14 @@ def _merge(base: Dict[str, Any], over: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-SETUP_DEFAULTS: Dict[str, Any] = copy.deepcopy(DEFAULTS["setups"])
+# Parameters for every setup the code knows; DEFAULTS["setups"] is only the
+# list that runs when the config doesn't name any.
+SETUP_DEFAULTS: Dict[str, Any] = {
+    **copy.deepcopy(DEFAULTS["setups"]),
+    "orb_fade": {"range_min": 15, "min_range_pct": 0.3, "max_range_pct": 3.0, "max_bars_outside": 3,
+                 "exit": {"stop": "setup"}},
+    "vwap_reclaim": {"min_bars_away": 3, "exit": {"stop": "setup"}},
+}
 
 
 def load_config(path: str | os.PathLike | None = None) -> Dict[str, Any]:

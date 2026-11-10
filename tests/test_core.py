@@ -132,7 +132,7 @@ class Backtest(unittest.TestCase):
         res = bt.run("TEST", prev + orb_day(DAY), "orb", c, 5)
         t = [x for x in res["trades"] if x["day"] == str(DAY)][0]
         self.assertEqual(t["exit_reason"], "target")
-        self.assertEqual(t["fill_exit"], round(103.25 * (1 - 0.0003), 2))
+        self.assertEqual(t["fill_exit"], 103.25)  # target is a limit: no slippage
         self.assertGreater(t["net"], 0)
 
     def test_random_history_stats_consistent(self):
@@ -261,3 +261,123 @@ class OnePerStock(unittest.TestCase):
         self.assertIn("already holding TEST (one position per stock)", res[1]["risk_reasons"])
         j = [{"day": str(DAY), "symbol": "TEST", "status": "open"}]
         self.assertEqual(check([o], c, j, now=None)[0]["risk_check"], "BLOCK")
+
+
+class FillModel(unittest.TestCase):
+    def test_touch_is_not_enough_and_stops_slip_more(self):
+        from groww_trader.backtest import entry_price, exit_price, walk_exit
+        c = cfg()
+        ts = datetime(2026, 10, 20, 10, 0, tzinfo=IST)
+        flat = datetime(2026, 10, 20, 15, 10, tzinfo=IST)
+        touch = [Candle(ts, 100, 102.0, 99.9, 101)]           # high exactly at target 102
+        self.assertIsNone(walk_exit("BUY", 99, 102.0, flat, touch, 0, 5, through=0.05))
+        through = [Candle(ts, 100, 102.05, 99.9, 101)]
+        self.assertEqual(walk_exit("BUY", 99, 102.0, flat, through, 0, 5, through=0.05)[1], "target")
+        self.assertEqual(exit_price(102.0, "target", "BUY", c), 102.0)
+        self.assertEqual(exit_price(100.0, "time", "BUY", c), 99.97)      # 0.03% slippage
+        self.assertEqual(exit_price(100.0, "stop", "BUY", c), 99.92)      # + 0.05% stop slippage
+        self.assertEqual(exit_price(100.0, "stop", "SELL", c), 100.08)
+        bar = Candle(ts, 100, 101, 99, 100.5)
+        self.assertEqual(entry_price(bar, "BUY", c), 100.03)
+        c["fills"] = {"entry": "mid"}
+        self.assertEqual(entry_price(bar, "BUY", c), 100.53)                # halfway to the high
+        self.assertEqual(entry_price(bar, "SELL", c), 99.47)
+
+
+def _session(day, path):
+    """path: list of (o, h, l, c) from 09:15 in 5-minute bars; rest flat."""
+    from fixtures import session_times
+    out = []
+    last = path[-1][3]
+    for i, ts in enumerate(session_times(day)):
+        o, h, l, c = path[i] if i < len(path) else (last, last + 0.05, last - 0.05, last)
+        out.append(Candle(ts, o, h, l, c, 1000))
+    return out
+
+
+class NewSetups(unittest.TestCase):
+    def test_orb_fade_failed_breakdown_buys(self):
+        bars = _session(DAY, [(100.5, 101, 100.2, 100.6), (100.6, 100.9, 100.0, 100.4),
+                              (100.4, 100.8, 100.1, 100.5),             # OR 100-101
+                              (100.5, 100.5, 99.4, 99.6),               # 09:30 closes below: breakdown
+                              (99.6, 100.4, 99.5, 100.3)])              # 09:35 back inside: failed
+        s = detect("orb_fade", "T", bars, cfg(), 5)
+        self.assertEqual((s["status"], s["side"], s["entry"], s["setup_stop"]), ("triggered", "BUY", 100.3, 99.4))
+        p = make_plan(s, {"stop": "setup", "target": "1.5R", "flat_by": "15:10"})
+        self.assertEqual(p["stop"], 99.4)
+
+    def test_orb_fade_breakout_that_holds_is_skipped(self):
+        bars = _session(DAY, [(100.5, 101, 100.2, 100.6), (100.6, 100.9, 100.0, 100.4),
+                              (100.4, 100.8, 100.1, 100.5)] +
+                        [(101 + i * 0.2, 101.3 + i * 0.2, 100.9 + i * 0.2, 101.2 + i * 0.2) for i in range(6)])
+        self.assertEqual(detect("orb_fade", "T", bars, cfg(), 5)["status"], "skipped")
+
+    def test_failed_breakout_short_needs_allow_short(self):
+        bars = _session(DAY, [(100.5, 101, 100.2, 100.6), (100.6, 100.9, 100.0, 100.4),
+                              (100.4, 100.8, 100.1, 100.5),
+                              (100.5, 101.6, 100.5, 101.4),             # breakout
+                              (101.4, 101.4, 100.5, 100.7)])            # back inside
+        self.assertNotEqual(detect("orb_fade", "T", bars, cfg(), 5).get("status"), "triggered")
+        c = cfg()
+        c["allow_short"] = True
+        s = detect("orb_fade", "T", bars, c, 5)
+        self.assertEqual((s["side"], s["setup_stop"]), ("SELL", 101.6))
+
+    def test_vwap_reclaim(self):
+        path = [(100, 100.1, 99.9, 100)] * 3 + [(100, 100, 99.3, 99.5)] * 3 + [(99.5, 100.6, 99.4, 100.5)]
+        bars = _session(DAY, path)
+        s = detect("vwap_reclaim", "T", bars, cfg(), 5)
+        self.assertEqual((s["status"], s["side"], s["entry"], s["setup_stop"]), ("triggered", "BUY", 100.5, 99.3))
+        self.assertTrue(s["trigger_time"].startswith("2026-10-20T09:50"))
+
+    def test_new_setups_run_in_backtest_and_sweep(self):
+        from groww_trader import sweep as sw
+        data = {"AAA": random_days(date(2026, 8, 3), 25, seed=5)}
+        for setup in ("orb_fade", "vwap_reclaim"):
+            res = bt.run("AAA", data["AAA"], setup, cfg(), 5)
+            self.assertNotIn("plan_error", res["not_triggered"])
+            for t in res["trades"]:
+                self.assertEqual(t["side"], "BUY")  # shorts off by default
+        vs = sw.variants(["orb_fade", "vwap_reclaim"], None, ["1.5R"], [15, 30])
+        self.assertEqual(len(vs), 4 * 2 + 4)
+
+
+class LongFetch(unittest.TestCase):
+    def _src(self, fail_before):
+        from groww_trader import data as d
+
+        class Client:
+            CANDLE_INTERVAL_MIN_5 = "5m"
+            calls = 0
+
+            def get_historical_candles(self, start_time, end_time, **kw):
+                Client.calls += 1
+                if start_time < fail_before:
+                    raise RuntimeError("data not available for this range")
+                return {"candles": [[end_time.replace(" ", "T"), 1, 2, 0.5, 1.5, 10]]}
+
+        s = d.GrowwSource.__new__(d.GrowwSource)
+        s.client, s.exchange, s.segment = Client(), "NSE", "CASH"
+        return s
+
+    def setUp(self):
+        from unittest import mock
+        from groww_trader import data as d
+        self._p = mock.patch.object(d._time, "sleep", lambda *_: None)
+        self._p.start()
+
+    def tearDown(self):
+        self._p.stop()
+
+    def test_old_windows_fail_but_recent_data_is_kept(self):
+        s = self._src("2026-09-01")
+        start = datetime(2026, 5, 1, tzinfo=IST)
+        end = datetime(2026, 10, 15, 15, 0, tzinfo=IST)
+        out = s.candles("SBIN", 5, start, end)
+        self.assertGreater(len(out), 0)
+        self.assertGreater(len(s.failed_windows), 0)
+
+    def test_everything_failing_still_raises(self):
+        s = self._src("2099-01-01")
+        with self.assertRaises(RuntimeError):
+            s.candles("SBIN", 5, datetime(2026, 5, 1, tzinfo=IST), datetime(2026, 10, 15, tzinfo=IST))

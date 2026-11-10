@@ -21,7 +21,9 @@ python3 <repo>/gtrade.py pause                         # no NEW positions (open 
 python3 <repo>/gtrade.py resume
 ```
 
-`run` prints one line per event and a status line per bar. It's safe to stop (Ctrl+C) and restart: all state is in `trader/journal.json`. `run` blocks until the close, so tell the user to start it in their own terminal or on a server rather than running it inside a chat turn. Use `once` and `report` from chat.
+`run` writes one line per event and a status line per bar to `trader/logs/paper-YYYY-MM-DD.log` (kept 30 days; also to the terminal when interactive). It's safe to stop and restart: all state is in `trader/journal.json`. `run` blocks until the close, so tell the user to start it on a server or in their own terminal rather than inside a chat turn. Use `once` and `report` from chat.
+
+Only one copy runs at a time (lock `trader/paper.lock`): a second `run` or `once` exits without touching the journal, and if the running copy hasn't completed a step for 15 minutes during market hours, it sends one "may be stuck" alert. `run_state.json` records the day's start, last step and whether the day finished, so cron can start `run` every 10 minutes as a safety net: no-op while running or after the day is done, otherwise a restart (announced on Telegram). `--force` reruns a finished day.
 
 ## What each step does
 
