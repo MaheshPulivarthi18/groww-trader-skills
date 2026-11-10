@@ -9,6 +9,8 @@ Open-source Claude skills for trading Indian markets (NSE) with **your own Groww
 
 Inspired by the design of [day-trader-skill](https://github.com/jakeschincariol/day-trader-skill) (MIT), rebuilt for Indian markets and Groww.
 
+> **What we found so far:** on a full year of 5-minute data and three years of daily data for 10 NSE large-caps, none of 140 rule variations made money after Groww's charges, intraday or swing. Before costs the intraday rules were about break-even; swing breakouts showed a small edge that delivery costs ate. Full tables and method: [docs/results.md](docs/results.md).
+
 > **Not financial advice.** This is software that reads market data and does arithmetic. It doesn't know your situation and can't see the future. Most intraday traders lose money, much of it to costs. You can lose money. Paper trade first and decide for yourself.
 
 ## Skills
