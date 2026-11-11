@@ -248,10 +248,12 @@ def cmd_show(args, cfg):
 def cmd_backtest(args, cfg):
     interval = args.interval or cfg["interval_min"]
     src = get_source(args.source, cfg["exchange"])
-    symbol = args.symbol.upper()
     override_exit(cfg, args.setup, args.stop, args.target)
     if args.shorts:
         cfg["allow_short"] = True
+    if not args.symbol:
+        return _backtest_account(args, cfg, src, interval)
+    symbol = args.symbol.upper()
     candles = get_candles(src, symbol, interval, args.days)
     res = bt.run(symbol, candles, args.setup, cfg, interval)
     res["rules"] = {"setup": args.setup, "shorts": bool(cfg.get("allow_short")), **exit_rules(cfg, args.setup),
@@ -264,6 +266,49 @@ def cmd_backtest(args, cfg):
         out(res)
     else:
         out({k: v for k, v in res.items() if k != "trades"})
+
+
+def _backtest_account(args, cfg, src, interval):
+    """Whole watchlist, one account: per-stock trades merged in time order
+    with the account limits from config (open positions, trades per day,
+    daily loss)."""
+    every, per_stock, errors = [], {}, {}
+    for s in [w.upper() for w in cfg["watchlist"]]:
+        try:
+            res = bt.run(s, get_candles(src, s, interval, args.days), args.setup, cfg, interval)
+        except Exception as e:
+            errors[s] = str(e)
+            continue
+        every += res["trades"]
+        per_stock[s] = {"signals": len(res["trades"])}
+    kept, skipped = bt.apply_account_limits(every, cfg)
+    for t in kept:
+        per_stock[t["symbol"]].setdefault("taken", 0)
+        per_stock[t["symbol"]]["taken"] += 1
+        per_stock[t["symbol"]]["net"] = round(per_stock[t["symbol"]].get("net", 0) + t["net"], 2)
+    kept.sort(key=lambda t: t["entry_time"])
+    days = sorted({t["day"] for t in every})
+    r = cfg["risk"]
+    res = {
+        "mode": "watchlist as one account",
+        "setup": args.setup, "interval_min": interval, "capital": cfg["capital"],
+        "rules": {**exit_rules(cfg, args.setup), "setup_params": setup_params(cfg, args.setup),
+                  "max_loss_per_trade": r["max_loss_per_trade"], "daily_loss_limit": r["daily_loss_limit"],
+                  "max_trades_per_day": r["max_trades_per_day"], "max_open_positions": r["max_open_positions"],
+                  "max_position_pct": r["max_position_pct"]},
+        "first_day": days[0] if days else None, "last_day": days[-1] if days else None,
+        "signals": len(every), "skipped_by_limits": skipped,
+        "stats": bt.stats(kept),
+        "return_on_capital_pct": round(100 * sum(t["net"] for t in kept) / cfg["capital"], 2) if kept else 0,
+        "per_stock": per_stock,
+        "outlook": bt.bootstrap(kept, next_n=args.next),
+        "data_errors": errors,
+    }
+    if args.trades:
+        res["trades"] = kept
+    if args.write:
+        write_json("backtest.json", res)
+    out(res)
 
 
 # Live candles kept in memory during `paper run`: the first step fetches a
@@ -800,7 +845,7 @@ def main(argv=None):
     p.add_argument("--write", action="store_true")
     add("show", cmd_show)
     p = add("backtest", cmd_backtest)
-    p.add_argument("symbol")
+    p.add_argument("symbol", nargs="?", help="one stock; leave out to test the whole watchlist as one account")
     p.add_argument("--setup", default="orb", choices=SETUPS)
     p.add_argument("--interval", type=int)
     p.add_argument("--days", type=int, default=60)

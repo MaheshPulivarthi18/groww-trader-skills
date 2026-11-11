@@ -13,6 +13,7 @@ Answers "how did this exact rule do on this stock, after costs?" Writes `trader/
 python3 <repo>/gtrade.py backtest SBIN --setup orb --days 60 --write
 python3 <repo>/gtrade.py backtest SBIN --setup pdh_breakout --stop level --target 2R
 python3 <repo>/gtrade.py backtest SBIN --source csv --trades     # offline, list every trade
+python3 <repo>/gtrade.py backtest --days 365 --source csv         # no symbol: whole watchlist as ONE account
 ```
 
 Groww serves 5-minute candles in windows of up to 30 days per request; the tool splits longer ranges and caches them in `trader/data/`.
@@ -40,3 +41,5 @@ Groww serves 5-minute candles in windows of up to 30 days per request; the tool 
 - Give the sample size. Under ~30 trades, call the result weak evidence.
 - The outlook is resampled history, not a forecast; markets change.
 - Never present a good backtest as a reason to trade live. Suggest paper trading it next, and testing the same rule on other stocks and other months to see if it holds.
+
+With no symbol, every watchlist stock is tested and the trades are merged in time order with the account limits from config (max open positions, trades per day, daily loss limit), as the paper bot applies them. Report `stats`, `return_on_capital_pct` and `skipped_by_limits`.

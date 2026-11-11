@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import random
 import statistics
-from typing import Any, Dict, List, Optional
+from typing import Tuple, Any, Dict, List, Optional
 
 from datetime import datetime, timedelta
 
@@ -158,12 +158,44 @@ def run(symbol: str, candles: List[Candle], setup: str, cfg: Dict[str, Any], int
             continue
         pnl = net_pnl(order["side"], sim["fill_entry"], sim["fill_exit"], order["qty"], cfg["charges"], product)
         planned_risk = order["risk_per_share"] * order["qty"]
-        trades.append({"day": str(day), "side": order["side"], "qty": order["qty"],
+        trades.append({"day": str(day), "symbol": symbol, "entry_time": bars[idx + 1].ts.isoformat(),
+                       "risk_rs": round(planned_risk, 2), "side": order["side"], "qty": order["qty"],
                        "entry": order["entry"], "stop": order["stop"], "target": order["target"],
                        **sim, **pnl, "r": round(pnl["net"] / planned_risk, 2) if planned_risk else 0})
     return {"symbol": symbol, "setup": setup, "interval_min": interval_min,
             "sessions": traded_days, "not_triggered": status_counts,
             "trades": trades, "stats": stats(trades)}
+
+
+def apply_account_limits(trades: List[Dict[str, Any]], cfg: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """Combine per-stock backtest trades into one account, the way the paper
+    bot does: in entry-time order, skip a trade when max_open_positions are
+    already open, max_trades_per_day are used, or the day's realised loss
+    (plus this trade's planned risk) would pass daily_loss_limit."""
+    r = cfg["risk"]
+    kept: List[Dict[str, Any]] = []
+    skipped: Dict[str, int] = {}
+    by_day: Dict[str, List[Dict[str, Any]]] = {}
+    for t in trades:
+        by_day.setdefault(t["day"], []).append(t)
+    for day in sorted(by_day):
+        taken: List[Dict[str, Any]] = []
+        for t in sorted(by_day[day], key=lambda x: (x["entry_time"], x["symbol"])):
+            at = t["entry_time"]
+            open_now = [k for k in taken if k["exit_time"] > at]
+            realized = sum(k["net"] for k in taken if k["exit_time"] <= at)
+            if len(open_now) >= r["max_open_positions"]:
+                why = "position limit"
+            elif len(taken) >= r["max_trades_per_day"]:
+                why = "trades-per-day limit"
+            elif realized <= -r["daily_loss_limit"] or -realized + t["risk_rs"] > r["daily_loss_limit"]:
+                why = "daily loss limit"
+            else:
+                taken.append(t)
+                continue
+            skipped[why] = skipped.get(why, 0) + 1
+        kept += taken
+    return kept, skipped
 
 
 def stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:

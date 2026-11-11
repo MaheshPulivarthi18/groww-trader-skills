@@ -422,3 +422,19 @@ class RateLimitRetry(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             with_retry(broken, sleep=waits.append)
         self.assertEqual(waits, [1.0, 2.0])  # no waiting on other errors
+
+
+def test_account_limits_skip_overlapping_and_daily_loss():
+    from groww_trader import backtest as btm
+    cfg = {"risk": {"max_open_positions": 1, "max_trades_per_day": 2, "daily_loss_limit": 400}}
+    T = lambda sym, e, x, net, risk=200: {"day": "2026-11-11", "symbol": sym, "entry_time": f"2026-11-11T{e}",
+                                          "exit_time": f"2026-11-11T{x}", "net": net, "risk_rs": risk}
+    trades = [T("A", "09:35", "10:00", -250), T("B", "09:40", "11:00", 100),   # B overlaps A
+              T("C", "10:05", "10:30", 50),                                    # -250 + 200 risk > 400? no: 450 > 400
+              T("D", "11:00", "12:00", 80)]
+    kept, skipped = btm.apply_account_limits(trades, cfg)
+    assert [t["symbol"] for t in kept] == ["A"]
+    assert skipped == {"position limit": 1, "daily loss limit": 2}
+    cfg["risk"]["daily_loss_limit"] = 1000
+    kept, skipped = btm.apply_account_limits(trades, cfg)
+    assert [t["symbol"] for t in kept] == ["A", "C"] and skipped["trades-per-day limit"] == 1
