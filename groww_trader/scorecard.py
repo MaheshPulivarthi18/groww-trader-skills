@@ -58,9 +58,11 @@ def build(res: Dict[str, Any], trades: List[Dict[str, Any]], calendar: List[str]
     else:
         share = vr["share_of_random_runs_as_good_pct"]
         tm = f" (time-matched, within {vr['time_matched_min']} min)" if vr.get("time_matched_min") else ""
+        border = (" - borderline: confirm with --baseline 1000 and --baseline-window 30"
+                  if beats and share > 1.0 else "")
         add(PASS if beats else FAIL, "Entries beat random timing",
             f"{share}% of {vr['runs']} random-timed versions{tm} did as well or better "
-            f"(real Rs {vr['real']['net']:,.0f} vs random median Rs {vr['random_net']['median']:,.0f})")
+            f"(real Rs {vr['real']['net']:,.0f} vs random median Rs {vr['random_net']['median']:,.0f}){border}")
 
     # 3. profit after charges
     net = st.get("net_total", 0.0)

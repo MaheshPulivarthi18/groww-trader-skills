@@ -35,14 +35,14 @@ Setup: range_min 15, min_range_pct 1.0, max_range_pct 3.0
 Account: Rs 20,000, max Rs 200 loss a trade, Rs 400 a day, 1 open, 2 trades a day
 
   [PASS] Enough trades to judge: 182 trades over 249 sessions
-  [FAIL] Entries beat random timing: (re-run pending with the corrected baseline, v0.8)
+  [PASS] Entries beat random timing: 4.7% of 300 random-timed versions did as well or better (real Rs -4,848 vs random median Rs -6,253)
   [FAIL] Profitable after charges: net Rs -4,848 (-24.24% of capital); before charges Rs -312, charges Rs 4,536
   [FAIL] Holds up in both halves of the period: before 2026-06-19: Rs -3,084 on 112 trades; from 2026-06-19: Rs -1,764 on 70 trades
   [FAIL] Worst drawdown tolerable: worst fall from a peak Rs 5,020 = 25.1% of capital (limit 15.0%)
   [cost] Average trade made Rs -1.71 before charges and paid Rs 24.92 in charges.
 
-VERDICT: NO EDGE: entries are no better than random, and it loses after charges.
-Next: Don't trade it. Tuning stops and targets won't create an edge; try a different idea.
+VERDICT: REAL SIGNAL, TOO SMALL FOR THE COSTS: entries beat random, but charges eat the edge.
+Next: Look for bigger moves per trade (fewer trades, longer holding) rather than tuning.
 ```
 
 ### What a trade costs

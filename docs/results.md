@@ -45,7 +45,16 @@ An earlier 60-day test of the same families pointed the same way, and single-sto
 | `orb`, stop mid-range, 1.5R | 182 | −312 | 4,536 | −4,848 (−24%) |
 | `orb_fade`, stop beyond the failed move, 1.5R | 373 | −4,034 | 9,352 | −13,386 (−67%) |
 
-**Correction (v0.8).** Our first random-entry comparison placed random entries on the *same day* as each real trade. Entries earlier that day "knew" a breakout was coming (the real trade exists only because one happened), which flattered the random side: on synthetic random-walk prices, entering 15 minutes before a breakout made about +₹35 a trade versus −₹8 at the breakout. That made `orb` look "worse than random (98%)". The baseline now uses random *other* days of the same stock; on random-walk prices it correctly lands in the middle (30-47%). The `orb` and `orb_fade` comparisons above are being re-run with the corrected baseline. The net results don't change: both lose after charges, and charges (about ₹25 a trade on ₹10,000) are larger than anything the entries make before costs. `gtrade.py costs` shows the break-even move for any trade size.
+Against random entries (300 runs; each real trade replayed on a random other day of the same stock, at a random time in the entry window, same stop %, target, size and charges):
+
+| rule | random runs as good or better | random median net ₹ | reading |
+|---|---:|---:|---|
+| `orb` | 4.7% | −6,253 | entries a little better than random (borderline) |
+| `orb_fade` | 93% | −12,516 | no better than random |
+
+So the breakout entry may carry a small real signal: about ₹8 a trade better than entering at random. But charges are about ₹25 a trade, so it still loses ₹4,848 (−24%) over the year. 4.7% is right at the 5% line, and many rules have been tried in this project, so treat it as "maybe", not proven. Fading the breakout has no signal at all.
+
+**Correction (v0.8).** Our first random-entry comparison placed random entries on the *same day* as each real trade. Entries earlier that day "knew" a breakout was coming (the real trade exists only because one happened), which flattered the random side: on synthetic random-walk prices, entering 15 minutes before a breakout made about +₹35 a trade versus −₹8 at the breakout. That made `orb` look "worse than random (98%)", the opposite of the corrected result above. The baseline now uses random *other* days; on random-walk prices it correctly lands in the middle (30-47%).
 
 ## Swing (delivery, CNC): closest, still negative
 
