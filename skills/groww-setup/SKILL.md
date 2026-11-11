@@ -7,6 +7,8 @@ description: Set up the Groww trader skills for a user - install the Groww SDK, 
 
 Gets one person running these tools against **their own** Groww account. Nothing is hosted; nothing leaves their machine except calls to Groww.
 
+Not everything needs Groww: `groww-costs` works with no login, and `groww-check-idea` can run on cached data (`--source csv`). Live data, `fetch` and paper trading need the API.
+
 ## Where things are
 
 `gtrade.py` is in the repository root, two folders above this SKILL.md (`<repo>/gtrade.py`). Files land in `trader/` under the current folder, or wherever `GTRADE_HOME` points (recommended on a server: `export GTRADE_HOME="$HOME/trading/trader"`, so commands work from any folder):
@@ -33,17 +35,17 @@ python3 <repo>/gtrade.py <command>
 
 5. **Charges.** The `charges` block follows Groww's published equity pricing (brokerage 0.1% capped at Rs 20 per order, min Rs 5; checked Nov 2026). Ask the user to confirm against groww.in/pricing/stocks. Backtest results are only as honest as these numbers.
 
-6. **Verify (read-only):** `python3 <repo>/gtrade.py check` prints the last price of the first watchlist symbol. Then `gtrade.py fetch --days 60` caches 5-minute candles for the watchlist in `trader/data/`.
+6. **Verify (read-only):** `python3 <repo>/gtrade.py check` prints the last price of the first watchlist symbol. Then `gtrade.py fetch --days 365` caches a year of 5-minute candles for the watchlist in `trader/data/`, enough for `groww-check-idea`.
 
 7. **Optional extras**, only if the user wants them:
    - A server that runs every market day: walk them through `<repo>/docs/oracle-cloud.md` (Oracle Always Free, reserved IP, cron).
    - Telegram alerts and `/pause`: `TELEGRAM_BOT_TOKEN`, then `gtrade.py telegram setup` to find `TELEGRAM_CHAT_ID`, then `gtrade.py telegram test`.
-   - MongoDB mirror for dashboards and `groww-review`: `pip install pymongo`, `GTRADE_MONGO_URI`, `GTRADE_MONGO_DB`, then `gtrade.py mongo check`. Use a DB user limited to `readWrite` on that database and allow only the server's IP.
+   - MongoDB mirror for dashboards and reviews (`groww-paper`): `pip install pymongo`, `GTRADE_MONGO_URI`, `GTRADE_MONGO_DB`, then `gtrade.py mongo check`. Use a DB user limited to `readWrite` on that database and allow only the server's IP.
 
    Env file rules: no spaces around `=`, single quotes around values, `chmod 600`. Never ask for or accept the values in chat.
 
 ## Rules to repeat to the user
 
-- These tools never place orders. A later broker skill will only ever do it after a risk PASS and the user typing yes for that exact order.
+- These tools never place orders. That's enforced in code: the Groww client is wrapped so only market-data calls work, and a test fails the build if order code ever appears.
 - SEBI's retail algo framework applies to API trading: their broker may require a static IP and strategy registration above certain order rates. Tell them to check Groww's API docs.
 - Not financial advice. Most intraday traders lose money, mostly to costs.

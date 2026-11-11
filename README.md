@@ -1,38 +1,49 @@
 # Groww Trader Skills
 
-Open-source Claude skills for trading Indian markets (NSE) with **your own Groww account**: scan your watchlist for setups, plan the exit before you enter, size the position after Indian charges, check it against your own risk limits, backtest and sweep rules honestly, and paper trade them on live data before risking a rupee.
+Open-source Claude skills that answer one question honestly: **does my trading idea actually work on Indian stocks, after real charges, or does it just look like it does?** Describe a strategy in plain words; Claude tests it on NSE data with your own Groww account and gives you a pass/fail scorecard.
 
-- **Runs on your machine, with your keys.** Nothing is hosted. The author never sees your account, keys or orders.
-- **No order placement in this version.** Every tool is read-only, arithmetic or simulated. A future broker skill will only send an order after a risk PASS *and* you typing yes for that exact order.
-- **Honest about costs.** Brokerage, STT, exchange fees, SEBI fee, stamp duty and GST are in every backtest, sweep and ticket. Defaults follow Groww's published pricing.
-- **Standard-library Python.** Extra packages only for what you switch on: Groww's SDK for live data, `pymongo` for the optional MongoDB mirror.
+- **Never places orders. Enforced in code.** The Groww client is wrapped so only market-data calls work (order calls raise an error), and a test fails the build if order code ever appears. Paper trading only.
+- **Tests against chance, not just against zero.** Every idea is compared with random entry timing on the same stocks and days. A rule that doesn't beat random has no edge, however its profit looks.
+- **Honest about costs.** Brokerage, STT, exchange and SEBI fees, stamp duty, GST and the DP charge are in every test, with conservative fills.
+- **Runs on your machine, with your keys.** Nothing is hosted. Standard-library Python; Groww's SDK only for live data.
 
 Inspired by the design of [day-trader-skill](https://github.com/jakeschincariol/day-trader-skill) (MIT), rebuilt for Indian markets and Groww.
 
-> **What we found so far:** on a full year of 5-minute data and three years of daily data for 10 NSE large-caps, none of 140 rule variations made money after Groww's charges, intraday or swing. Before costs the intraday rules were about break-even; swing breakouts showed a small edge that delivery costs ate. Full tables and method: [docs/results.md](docs/results.md).
+> **What we found so far:** on a full year of 5-minute data for 10 NSE large-caps, the opening-range breakout and its "fade" both lost money after charges, and neither beat random entry timing: the average trade made about Rs 0 before charges and paid about Rs 25 in them. Swing breakouts and monthly momentum didn't survive the unseen period either. Full tables and method: [docs/results.md](docs/results.md).
 
-> **Not financial advice.** This is software that reads market data and does arithmetic. It doesn't know your situation and can't see the future. Most intraday traders lose money, much of it to costs. You can lose money. Paper trade first and decide for yourself.
+> **Not financial advice.** This is software that reads market data and does arithmetic. It doesn't know your situation and can't see the future. SEBI found 7 in 10 individual intraday traders in the cash market lost money in FY23. Test first and decide for yourself.
 
 ## Skills
 
-| skill | job | writes |
+| skill | ask Claude things like | main commands |
 |---|---|---|
-| `groww-setup` | install, connect your Groww API credentials, set your limits | `trader/config.json` |
-| `groww-scanner` | find opening-range and previous-day-high breakouts on your watchlist | `trader/scan.json` |
-| `groww-exit` | stop, target and flat-by time, decided before entry | `trader/plan.json` |
-| `groww-budget` | quantity so the loss at the stop, after charges, fits your limit | `trader/orders.json` |
-| `groww-risk` | PASS or BLOCK every ticket against your rules | `trader/orders.json` |
-| `groww-backtest` | replay one rule over past sessions after slippage and charges | `trader/backtest.json` |
-| `groww-sweep` | try many intraday rule variations; choose on older data, judge on newer unseen data | `trader/sweep.json` |
-| `groww-swing` | the same honest search for multi-day (delivery) breakout rules on daily candles | `trader/swing.json` |
-| `groww-portfolio` | multi-stock strategies (momentum + regime filter, low volatility, dual momentum), monthly rebalance, vs holding the Nifty ETF | `trader/portfolio.json` |
-| `groww-paper` | run the whole pipeline on live data and record simulated trades; never sends orders | `trader/journal.json` |
-| `groww-review` | answer questions and build dashboards from the optional MongoDB mirror | reads only |
+| `groww-check-idea` | "does buying the 15-minute breakout with a 2R target work?", "test momentum on the Nifty 100" | `evaluate`, `backtest`, `sweep`, `swing`, `portfolio` |
+| `groww-costs` | "what does a Rs 10,000 intraday trade cost?", "is a Rs 2,000 trade worth it?" | `costs` |
+| `groww-paper` | "how did today go?", "what did the bot do and when?", "why was SBIN blocked?" | `paper run/once/report/replay`, MongoDB review |
+| `groww-research` | "what broke out this morning?", "where should my stop go and how many shares?" | `scan`, `plan`, `size`, `risk`, `inspect`, `audit` |
+| `groww-setup` | "set this up with my Groww account" | `check`, `fetch` |
+
+### The scorecard
 
 ```
-scanner -> exit -> budget -> risk           (one trade idea)
-backtest, sweep                             (before you trust any rule)
-paper                                       (weeks of forward testing on live data)
+$ python3 gtrade.py evaluate --setup orb --source csv
+  [PASS] Enough trades to judge: 182 trades over 250 sessions
+  [FAIL] Entries beat random timing: 98.2% of 500 random-timed versions did as well or better
+  [FAIL] Profitable after charges: net Rs -4,848 (-24.2% of capital); before charges Rs -312, charges Rs 4,536
+  [FAIL] Holds up in both halves of the period: ...
+  [PASS] Worst drawdown tolerable: ...
+  [cost] Average trade made Rs -1.71 before charges and paid Rs 24.92 in charges.
+
+VERDICT: NO EDGE: entries are no better than random, and it loses after charges.
+Next: Don't trade it. Tuning stops and targets won't create an edge; try a different idea.
+```
+
+### What a trade costs
+
+```
+$ python3 gtrade.py costs 10000 --product MIS --stop-pct 0.5
+ trade value  type              charges  break-even move  + slippage  costs vs risk
+Rs    10,000  intraday (MIS)  Rs  27.15           0.272%      0.332%          66.3%
 ```
 
 ## Install
@@ -44,14 +55,15 @@ In Claude Code, as a plugin:
 /plugin install groww-trader-skills@groww-trader-skills
 ```
 
-Or clone and copy the skills:
+Or clone and link the skills (links, not copies: the skills call `gtrade.py` in the repo root):
 
 ```
 git clone https://github.com/MaheshPulivarthi18/groww-trader-skills.git
-cp -r groww-trader-skills/skills/* ~/.claude/skills/
+mkdir -p ~/.claude/skills
+for d in "$PWD"/groww-trader-skills/skills/*/; do ln -sfn "$d" ~/.claude/skills/; done
 ```
 
-The skills call `gtrade.py` in the repo root, so keep the clone where it is. For live data you need Python 3.9+, an active Groww Trading API subscription ([groww.in/trade-api](https://groww.in/trade-api)) and `pip install growwapi pyotp`.
+Keep the clone where it is. For live data you need Python 3.9+, an active Groww Trading API subscription ([groww.in/trade-api](https://groww.in/trade-api)) and `pip install growwapi pyotp`.
 
 **Running it on a server:** see [docs/oracle-cloud.md](docs/oracle-cloud.md) for a step-by-step Oracle Cloud Always Free setup in Mumbai with a reserved IP, cron, and the pitfalls we hit.
 
@@ -73,8 +85,10 @@ For TOTP: on Groww's API Keys page, open the dropdown next to **Generate API Key
 ```
 mkdir -p trader && cp config.example.json trader/config.json    # then edit YOUR limits
 python3 gtrade.py check                                         # read-only credential test
-python3 gtrade.py fetch --days 60                               # cache 5-min candles for the watchlist
-python3 gtrade.py backtest SBIN --setup orb --source csv        # how did one rule do, after costs?
+python3 gtrade.py costs                                         # what trades cost (no login needed)
+python3 gtrade.py fetch --days 365                              # cache a year of 5-min candles for the watchlist
+python3 gtrade.py evaluate --setup orb --source csv             # the scorecard: does the idea work?
+python3 gtrade.py backtest SBIN --setup orb --source csv        # one stock in detail
 python3 gtrade.py backtest --days 365 --source csv              # whole watchlist as one account, with your limits
 python3 gtrade.py backtest --days 365 --source csv --baseline 500   # does the signal beat random entry timing?
 python3 gtrade.py sweep --source csv                            # many rules, judged on unseen data
@@ -191,11 +205,11 @@ Conservative on purpose: entry at the next bar's open plus slippage; targets nee
 python3 -m unittest discover -s tests -v
 ```
 
-Offline, on synthetic candles (not real market data). They pin the charge math (intraday and delivery), every setup's triggers, per-setup exits, sizing, the risk gate, the fill model, the sweep's train/test separation, swing entries and exits, paper trading (no peeking at unfinished bars, restart-safe, identical to the backtest, pause behaviour), the single-instance lock, restart and stuck detection, long fetches with missing old windows, Telegram command handling and the MongoDB mirror's failure path.
+Offline, on synthetic candles (not real market data). They include the no-orders guard (a static scan for order code, and the read-only client blocking order calls), the scorecard verdicts, the random-entry baseline (no edge found on random walks, a planted edge detected), the charge math (intraday and delivery), every setup's triggers, per-setup exits, sizing, the risk gate, the fill model, the sweep's train/test separation, swing entries and exits, paper trading (no peeking at unfinished bars, restart-safe, identical to the backtest, pause behaviour), the single-instance lock, restart and stuck detection, long fetches with missing old windows, Telegram command handling and the MongoDB mirror's failure path.
 
 ## Fine print
 
-- **Regulation.** SEBI's retail algo framework applies to API trading through brokers: orders must come from a static IP registered with your broker (Groww's deadline was 31 March 2026), plus 2FA, order-rate limits and strategy registration above certain thresholds. This project doesn't place orders yet; when it does, meeting your broker's requirements is your responsibility. Check Groww's API documentation and current SEBI/NSE circulars.
+- **Regulation.** SEBI's retail algo framework applies to API trading through brokers: orders must come from a static IP registered with your broker (Groww's deadline was 31 March 2026), plus 2FA, order-rate limits and strategy registration above certain thresholds. This project only reads market data and never places orders, so those order rules don't apply to it; data calls need no static IP. Check Groww's API documentation and current SEBI/NSE circulars.
 - **Personal use.** A toolkit for your own account. Don't use it to trade other people's accounts or to sell signals; that needs registrations this project doesn't have.
 - **Data.** 5-minute candles, not ticks. Exchange holidays aren't modelled (Groww just returns no candles). Check anything that matters in the Groww app.
 - **A stop is a plan, not a guarantee.** Fast markets and gaps fill worse than the stop.
@@ -203,13 +217,15 @@ Offline, on synthetic candles (not real market data). They pin the charge math (
 
 ## Roadmap
 
-- `groww-broker`: live orders via `growwapi`, only after a rule survives sweep and weeks of paper trading; risk PASS and an explicit yes per order; from a static IP registered with Groww
-- Swing and portfolio paper tracking (the paper engine is intraday only today)
-- Pairs trading / statistical arbitrage (needs shorting and a stock-borrow model)
-- More setups (gap-and-go, index-relative strength)
-- `groww-news`: NSE/BSE corporate announcements for the watchlist
+No order placement is planned. The aim is to make the answers more trustworthy and easier to get:
 
-Contributions welcome. Keep the rules: no order without a PASS and a yes, paper by default, keys out of code.
+- Random-entry baseline for swing and portfolio tests (does momentum beat picking stocks at random?)
+- Time-matched random baseline; walk-forward testing; a warning sized to how many variations were tried
+- Free official NSE daily data (bhavcopy) with corporate actions, so testing works without a Groww account
+- Taxes in multi-day tests; a weekly paper-vs-backtest report
+- Configuration by conversation instead of editing JSON
+
+Contributions welcome. Keep the rules: no order code, paper only, keys out of code.
 
 ## License
 

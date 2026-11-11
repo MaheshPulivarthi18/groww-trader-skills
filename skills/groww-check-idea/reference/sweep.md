@@ -1,13 +1,8 @@
----
-name: groww-sweep
-description: Search for intraday rules honestly - try many setup, stop, target and opening-range variations across the watchlist, choose on the earlier part of the data and check the choice on the later part it never saw, after Indian charges. Use when the user wants to find better rules, optimise settings, or asks which stop or target works best.
----
-
 # Groww Sweep
 
 Trying 50 variations and keeping the best one almost always finds something that looks profitable by luck. The sweep guards against that by splitting the history by date: it **chooses on the train period** (earlier ~60%) and **reports the test period** (later ~40%), which played no part in the choice.
 
-`gtrade.py` is in the repository root, two folders above this SKILL.md.
+`gtrade.py` is in the repository root, three folders above this file.
 
 ```
 python3 <repo>/gtrade.py sweep --source csv                                  # whole watchlist, default grid
@@ -15,9 +10,9 @@ python3 <repo>/gtrade.py sweep --setups orb --targets 1.5R,2R,3R --ranges 15,30 
 python3 <repo>/gtrade.py sweep SBIN ICICIBANK --stops pct:0.5,pct:1 --json --write
 ```
 
-Defaults: all four setups (`orb`, `pdh_breakout`, `orb_fade`, `vwap_reclaim`); every stop that suits each setup (`orb`: or_mid, or_low, pct:0.5, pct:1, atr:1.5; `pdh_breakout`: level, pct:...; `orb_fade` and `vwap_reclaim`: setup, pct:...); targets `1R,1.5R,2R,3R`; `--ranges 15,30` tries opening-range lengths for orb and orb_fade; `--shorts` adds short trades; train 60%; a variation needs at least `--min-trades 10` train trades to be ranked. Uses the same fill model, slippage and charges as `groww-backtest`.
+Defaults: all four setups (`orb`, `pdh_breakout`, `orb_fade`, `vwap_reclaim`); every stop that suits each setup (`orb`: or_mid, or_low, pct:0.5, pct:1, atr:1.5; `pdh_breakout`: level, pct:...; `orb_fade` and `vwap_reclaim`: setup, pct:...); targets `1R,1.5R,2R,3R`; `--ranges 15,30` tries opening-range lengths for orb and orb_fade; `--shorts` adds short trades; train 60%; a variation needs at least `--min-trades 10` train trades to be ranked. Uses the same fill model, slippage and charges as `groww-check-idea`.
 
-Data: more history makes the verdict stronger. `fetch --days 365` asks Groww for a year in 30-day windows and keeps whatever exists (it reports how far back it got). `--source csv` reuses the cache. For multi-day trades use `groww-swing` instead.
+Data: more history makes the verdict stronger. `fetch --days 365` asks Groww for a year in 30-day windows and keeps whatever exists (it reports how far back it got). `--source csv` reuses the cache. For multi-day trades use the swing test (`reference/swing.md`) instead.
 
 ## Output
 

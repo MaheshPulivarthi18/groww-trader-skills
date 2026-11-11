@@ -1,8 +1,3 @@
----
-name: groww-review
-description: Review the Groww trader bot's paper trading activity stored in MongoDB - today's status, trades, P&L by day, blocked or missed ideas, bot health and saved backtests - and build dashboards from it. Use when the user asks how trading went, what the bot is doing, why a trade was blocked, or wants a dashboard of their trading, and a MongoDB connection is available.
----
-
 # Groww Review (MongoDB)
 
 The bot mirrors its activity to MongoDB when `GTRADE_MONGO_URI` is set on the server (`gtrade.py mongo check` verifies it). Read it with the MongoDB MCP tools: find the project and cluster, connect, then query database `groww_trader` (or the user's `GTRADE_MONGO_DB`). **Read only.** Never insert, update or delete; the bot owns this data, and the local `trader/journal.json` on the server is the source of truth.

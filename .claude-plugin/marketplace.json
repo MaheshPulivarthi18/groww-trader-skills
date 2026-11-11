@@ -5,7 +5,7 @@
     {
       "name": "groww-trader-skills",
       "source": "./",
-      "description": "Scan, plan, size, risk-check and backtest NSE trades with your own Groww account. Paper first."
+      "description": "Check whether a trading idea for Indian stocks really works, after real charges and against random entry timing. Never places orders."
     }
   ]
 }

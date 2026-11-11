@@ -1,13 +1,8 @@
----
-name: groww-scanner
-description: Scan the user's NSE watchlist for intraday setups (opening-range breakout, previous-day-high breakout) using Groww or cached candles, and report which have triggered, which are waiting and which expired. Use when the user asks what is setting up, what broke out, or to scan stocks. Read-only; never places orders.
----
-
 # Groww Scanner
 
-Finds setups on the user's watchlist. Writes `trader/scan.json`, which `groww-exit` reads next.
+Finds setups on the user's watchlist. Writes `trader/scan.json`, which the exit planner (`reference/exits.md`) reads next.
 
-`gtrade.py` is in the repository root, two folders above this SKILL.md.
+`gtrade.py` is in the repository root, three folders above this file.
 
 ## Commands
 
@@ -34,5 +29,5 @@ Statuses: `triggered`, `waiting` (range still forming, or no break yet), `expire
 - Lead with what triggered: symbol, side, trigger time (IST), entry price and the levels (OR high/low/mid or PDH/PDL).
 - Then a one-line count of waiting / expired / skipped.
 - Only completed bars count; a bar still forming is never a trigger.
-- A trigger is a chart event, not a recommendation. Offer the next step: plan the exit (`groww-exit`) and, before any real money, backtest the setup on that stock (`groww-backtest`).
+- A trigger is a chart event, not a recommendation. Offer the next step: plan the exit (the exit planner (`reference/exits.md`)) and, before any real money, backtest the setup on that stock (`groww-check-idea`).
 - Candles are 5-minute bars, not ticks. Check prices in the Groww app before acting.

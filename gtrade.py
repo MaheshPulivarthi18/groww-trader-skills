@@ -272,46 +272,92 @@ def cmd_backtest(args, cfg):
         out({k: v for k, v in res.items() if k != "trades"})
 
 
-def _backtest_account(args, cfg, src, interval):
+def account_backtest(cfg, src, interval, setup, days, symbols=None, baseline_runs=0, next_n=20):
     """Whole watchlist, one account: per-stock trades merged in time order
     with the account limits from config (open positions, trades per day,
-    daily loss)."""
+    daily loss). Returns (result, kept_trades, calendar_days)."""
     every, per_stock, errors, candles = [], {}, {}, {}
-    for s in [w.upper() for w in cfg["watchlist"]]:
+    for s in [w.upper() for w in (symbols or cfg["watchlist"])]:
         try:
-            candles[s] = get_candles(src, s, interval, args.days)
-            res = bt.run(s, candles[s], args.setup, cfg, interval)
+            candles[s] = get_candles(src, s, interval, days)
+            res = bt.run(s, candles[s], setup, cfg, interval)
         except Exception as e:
             errors[s] = str(e)
             continue
         every += res["trades"]
         per_stock[s] = {"signals": len(res["trades"])}
+    if not candles:
+        sys.exit(f"error: no data for any symbol: {errors}")
     kept, skipped = bt.apply_account_limits(every, cfg)
     for t in kept:
         per_stock[t["symbol"]].setdefault("taken", 0)
         per_stock[t["symbol"]]["taken"] += 1
         per_stock[t["symbol"]]["net"] = round(per_stock[t["symbol"]].get("net", 0) + t["net"], 2)
     kept.sort(key=lambda t: t["entry_time"])
-    days = sorted({t["day"] for t in every})
+    calendar = sorted({str(d) for cs in candles.values() for d in by_session(cs)})
     r = cfg["risk"]
     res = {
         "mode": "watchlist as one account",
-        "setup": args.setup, "interval_min": interval, "capital": cfg["capital"],
-        "rules": {**exit_rules(cfg, args.setup), "setup_params": setup_params(cfg, args.setup),
+        "setup": setup, "interval_min": interval, "capital": cfg["capital"],
+        "rules": {**exit_rules(cfg, setup), "setup_params": setup_params(cfg, setup),
+                  "shorts": bool(cfg.get("allow_short")),
                   "max_loss_per_trade": r["max_loss_per_trade"], "daily_loss_limit": r["daily_loss_limit"],
                   "max_trades_per_day": r["max_trades_per_day"], "max_open_positions": r["max_open_positions"],
                   "max_position_pct": r["max_position_pct"]},
-        "first_day": days[0] if days else None, "last_day": days[-1] if days else None,
+        "first_day": calendar[0] if calendar else None, "last_day": calendar[-1] if calendar else None,
+        "sessions": len(calendar),
         "signals": len(every), "skipped_by_limits": skipped,
         "stats": bt.stats(kept),
         "return_on_capital_pct": round(100 * sum(t["net"] for t in kept) / cfg["capital"], 2) if kept else 0,
         "per_stock": per_stock,
-        "outlook": bt.bootstrap(kept, next_n=args.next),
+        "outlook": bt.bootstrap(kept, next_n=next_n),
         "data_errors": errors,
     }
-    if args.baseline:
+    if baseline_runs:
         from groww_trader import baseline
-        res["vs_random_entries"] = baseline.compare(kept, candles, cfg, args.setup, interval, runs=args.baseline)
+        res["vs_random_entries"] = baseline.compare(kept, candles, cfg, setup, interval, runs=baseline_runs)
+    return res, kept, calendar
+
+
+def cmd_evaluate(args, cfg):
+    """Test an idea end to end and print the scorecard: whole watchlist as one
+    account, random-entry baseline, both halves of the period, drawdown."""
+    from groww_trader import scorecard
+    interval = args.interval or cfg["interval_min"]
+    override_exit(cfg, args.setup, args.stop, args.target)
+    if args.shorts:
+        cfg["allow_short"] = True
+    src = get_source(args.source, cfg["exchange"])
+    symbols = [x.upper() for x in args.symbols] if args.symbols else None
+    res, kept, calendar = account_backtest(cfg, src, interval, args.setup, args.days, symbols=symbols,
+                                           baseline_runs=args.baseline)
+    card = scorecard.build(res, kept, calendar)
+    res["scorecard"] = card
+    if args.write:
+        write_json("evaluate.json", res)
+        get_store().save_backtest(res)
+    if args.json:
+        out(res)
+        return
+    rules = res["rules"]
+    sp = rules["setup_params"]
+    names = list(res["per_stock"]) or (symbols or cfg["watchlist"])
+    header = (f"Idea: {args.setup} on {len(names)} stocks, {interval}-min bars, "
+              f"{res['first_day']} to {res['last_day']} ({res['sessions']} sessions)\n"
+              f"Exits: stop {rules['stop']}, target {rules['target']}, out by {rules['flat_by']}"
+              f"{' | shorts allowed' if rules['shorts'] else ''}\n"
+              f"Setup: " + ", ".join(f"{k} {v}" for k, v in sp.items() if k != "exit") + "\n"
+              f"Account: Rs {cfg['capital']:,.0f}, max Rs {rules['max_loss_per_trade']} loss a trade, "
+              f"Rs {rules['daily_loss_limit']} a day, {rules['max_open_positions']} open, "
+              f"{rules['max_trades_per_day']} trades a day\n")
+    print(scorecard.render(card, header))
+    if res["data_errors"]:
+        print(f"\ndata errors (left out): {res['data_errors']}")
+
+
+def _backtest_account(args, cfg, src, interval):
+    res, kept, _ = account_backtest(cfg, src, interval, args.setup, args.days,
+                                    baseline_runs=args.baseline, next_n=args.next)
     if args.trades:
         res["trades"] = kept
     if args.write:
@@ -810,6 +856,42 @@ def cmd_mongo(args, cfg):
     out({"ok": ok, "journal_entries": len(journal), **({} if ok else {"reason": store.error})})
 
 
+def cmd_costs(args, cfg):
+    """Charges for one round trip and the move needed to break even."""
+    from groww_trader.costs import break_even
+    ch, slip = cfg["charges"], cfg.get("slippage_pct", 0.0)
+    if args.price and args.qty:
+        values = [args.price * args.qty]
+    elif args.value:
+        values = [args.value]
+    else:
+        values = [2000, 5000, 10000, 25000, 50000, 100000]
+    products = [args.product] if args.product else ["MIS", "CNC"]
+    rows = [break_even(v, ch, p, stop_pct=args.stop_pct or 0, slippage_pct=slip)
+            for v in values for p in products]
+    if args.json:
+        out(rows)
+        return
+    print("Round trip = buy + sell at the same price. Groww charges as configured; re-check groww.in/pricing.")
+    print(f"{'trade value':>12}  {'type':<15} {'charges':>9}  {'break-even move':>15}"
+          + (f"  {'+ slippage':>10}" if slip else "") + (f"  {'costs vs risk':>13}" if args.stop_pct else ""))
+    for r in rows:
+        line = (f"Rs {r['trade_value']:>9,.0f}  {r['product']:<15} Rs {r['charges']['total']:>6.2f}"
+                f"  {r['break_even_move_pct']:>14.3f}%")
+        if slip:
+            line += f"  {r.get('break_even_with_slippage_pct', r['break_even_move_pct']):>9.3f}%"
+        if args.stop_pct:
+            line += f"  {r['costs_as_pct_of_risk']:>12.1f}%"
+        print(line)
+    if args.stop_pct:
+        print(f"\ncosts vs risk: charges (+ slippage) as a share of what you lose at a {args.stop_pct}% stop. "
+              "Above about 20%, costs eat most of any edge.")
+    if len(values) == 1:
+        r = rows[0]
+        print("\nbreakdown (" + r["product"] + "): "
+              + ", ".join(f"{k} {v}" for k, v in r["charges"].items() if k != "total" and v))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", help="config file (default trader/config.json)")
@@ -824,6 +906,26 @@ def main(argv=None):
         return p
 
     add("check", cmd_check)
+    p = add("evaluate", cmd_evaluate, symbols=True)
+    p.description = "Test an idea on the whole watchlist (or the symbols given) and print a pass/fail scorecard."
+    p.add_argument("--setup", default="orb", choices=SETUPS)
+    p.add_argument("--interval", type=int)
+    p.add_argument("--days", type=int, default=365)
+    p.add_argument("--stop")
+    p.add_argument("--target")
+    p.add_argument("--shorts", action="store_true")
+    p.add_argument("--baseline", type=int, default=300, metavar="RUNS",
+                   help="random-entry runs (default 300; 0 skips the check)")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--write", action="store_true", help="save to trader/evaluate.json (and MongoDB if set up)")
+    p = sub.add_parser("costs", help="what a trade really costs, and the move needed to break even")
+    p.set_defaults(fn=cmd_costs)
+    p.add_argument("value", nargs="?", type=float, help="trade value in rupees (default: a table of sizes)")
+    p.add_argument("--price", type=float)
+    p.add_argument("--qty", type=int)
+    p.add_argument("--product", choices=["MIS", "CNC"], type=str.upper, help="MIS intraday, CNC delivery (default both)")
+    p.add_argument("--stop-pct", type=float, help="your stop distance in %%: shows costs as a share of the risk")
+    p.add_argument("--json", action="store_true")
     add("ltp", cmd_ltp, symbols=True)
     p = add("fetch", cmd_fetch, symbols=True)
     p.add_argument("--interval", type=int, default=5)

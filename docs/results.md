@@ -36,6 +36,17 @@ How to read it: the best rule lost about **₹64 per trade**, and charges on a ~
 
 An earlier 60-day test of the same families pointed the same way, and single-stock backtests showed the mechanism: most breakouts hit the stop or ran out of time, few reached the target.
 
+### Against random entry timing (₹20,000 account)
+
+`gtrade.py backtest --days 365 --source csv --baseline 500`, the whole watchlist as one account: ₹20,000 capital, ₹200 max loss a trade, ₹400 a day, 1 position at a time, 2 trades a day, opening range at least 1%. Each real trade was replayed 500 times at a random entry time on the same stock and day, with the same stop %, target, fills and charges.
+
+| rule | trades | before charges ₹ | charges ₹ | net ₹ | random runs as good or better |
+|---|---:|---:|---:|---:|---:|
+| `orb`, stop mid-range, 1.5R | 182 | −312 | 4,536 | −4,848 (−24%) | 98.2% (worse than random) |
+| `orb_fade`, stop beyond the failed move, 1.5R | 373 | −4,034 | 9,352 | −13,386 (−67%) | 62% (same as random) |
+
+Neither entry beats random timing. Random long entries made about ₹6 a trade before charges (the market drifted up over the year) against about ₹25 of charges, so even random buying lost. Buying breakouts did slightly worse than random, but fading them wasn't better than random either, so this isn't a tradeable reversal; it is most likely time of day (breakout entries cluster in the choppy first hour). For intraday trades on these stocks, charges, not entry timing, decide the result. `gtrade.py costs` shows the break-even move for any trade size.
+
 ## Swing (delivery, CNC): closest, still negative
 
 `gtrade.py swing --source csv`: 72 variations of an N-day-high breakout (20 or 55 days; stop 3%, 5% or ATR×2; target 2R, 3R or none; hold up to 10 or 20 days; with or without a 50-day average filter), longs only.

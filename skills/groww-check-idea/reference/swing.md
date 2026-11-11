@@ -1,13 +1,8 @@
----
-name: groww-swing
-description: Test multi-day (swing, delivery/CNC) breakout rules on daily NSE candles after delivery charges, choosing on the earlier part of the history and judging on the later unseen part. Use when the user wants to hold trades for days or weeks instead of intraday, asks about swing or positional trading, or intraday rules keep losing to costs.
----
-
 # Groww Swing
 
 Intraday rules fight about 0.2% of costs on every trade. Swing trades aim for bigger moves over days, so costs are a smaller share, but delivery has its own: STT 0.1% on both buy and sell, stamp duty 0.015%, brokerage, exchange/SEBI fees, GST and a DP charge (Groww: Rs 20 + GST) on each sell.
 
-`gtrade.py` is in the repository root, two folders above this SKILL.md.
+`gtrade.py` is in the repository root, three folders above this file.
 
 ```
 python3 <repo>/gtrade.py fetch --interval 1440 --days 1100      # daily candles, ~3 years
@@ -23,6 +18,6 @@ Defaults: lookbacks `20,55`; stops `pct:3,pct:5,atr:2` (daily ATR14); targets `2
 
 ## How to report
 
-Same as `groww-sweep`: say how many variations were tried, judge by the **test** column, give trade counts (swing produces few trades, so evidence is thin: call anything under ~30 test trades weak), and quote the verdict. Overlapping rules (e.g. with and without the trend filter) often give identical rows; that isn't extra evidence.
+Same as the sweep (`reference/sweep.md`): say how many variations were tried, judge by the **test** column, give trade counts (swing produces few trades, so evidence is thin: call anything under ~30 test trades weak), and quote the verdict. Overlapping rules (e.g. with and without the trend filter) often give identical rows; that isn't extra evidence.
 
 There is no swing paper-trading mode yet. If a rule survives, suggest the user tracks its signals by hand (or in a sheet) for a few months before trusting it. Never suggest live trading on a backtest.

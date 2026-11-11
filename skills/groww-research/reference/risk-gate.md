@@ -1,13 +1,8 @@
----
-name: groww-risk
-description: Check every order ticket in trader/orders.json against the user's own limits (loss per trade, daily loss limit, trades per day, open positions, reward:risk, position size, shorting, entry window) and mark it PASS or BLOCK with reasons. Use before any order is considered, or when the user asks whether a trade fits their rules.
----
-
 # Groww Risk Gate
 
-The last check before an order. Nothing may act on an order that is not `PASS`.
+The last check before a paper trade, or a trade the user is thinking of placing themselves. This toolkit never places orders; a ticket that isn't `PASS` shouldn't be acted on.
 
-`gtrade.py` is in the repository root, two folders above this SKILL.md.
+`gtrade.py` is in the repository root, three folders above this file.
 
 ```
 python3 <repo>/gtrade.py risk --write        # checks against the clock now (IST)

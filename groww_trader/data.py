@@ -179,6 +179,36 @@ def with_retry(call, tries: int = 4, first_wait: float = 1.0, sleep=None):
             wait *= 2
 
 
+READ_ONLY_METHODS = frozenset({
+    "get_historical_candles", "get_historical_candle_data", "get_ltp", "get_quote", "get_ohlc",
+    "get_instrument_by_groww_symbol", "get_instrument_by_exchange_and_trading_symbol",
+    "get_all_instruments",
+})
+
+
+class ReadOnlyClient:
+    """Wraps the Groww SDK client so only market-data calls get through.
+
+    This toolkit never places, modifies or cancels orders. The guarantee is
+    enforced here, not just promised: anything that isn't a known read-only
+    data call (or an UPPERCASE constant such as EXCHANGE_NSE) raises."""
+
+    def __init__(self, client):
+        object.__setattr__(self, "_client", client)
+
+    def __getattr__(self, name):
+        if name in READ_ONLY_METHODS or name[:1].isupper():
+            return getattr(self._client, name)
+        raise PermissionError(f"groww-trader-skills is read-only: '{name}' is blocked. "
+                              "This toolkit never places, modifies or cancels orders.")
+
+    def __setattr__(self, name, value):
+        raise PermissionError("the read-only Groww client can't be modified")
+
+    def __dir__(self):
+        return [a for a in dir(self._client) if a in READ_ONLY_METHODS or a[:1].isupper()]
+
+
 class GrowwSource:
     name = "groww"
 
@@ -189,7 +219,8 @@ class GrowwSource:
             raise RuntimeError("The official Groww SDK is not installed: pip install growwapi") from e
         self._GrowwAPI = GrowwAPI
         # Login is rate limited too; retry it like data calls.
-        self.client = GrowwAPI(with_retry(lambda: self._access_token(GrowwAPI), first_wait=2.0))
+        raw = GrowwAPI(with_retry(lambda: self._access_token(GrowwAPI), first_wait=2.0))
+        self.client = ReadOnlyClient(raw)  # market data only: order calls raise
         self.exchange = exchange
         self.segment = segment
 

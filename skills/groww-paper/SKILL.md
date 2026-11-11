@@ -1,6 +1,6 @@
 ---
 name: groww-paper
-description: Paper trade on live Groww data - run the scanner, exit planner, sizing and risk gate during market hours and record simulated fills and exits in trader/journal.json without sending any order. Also replays past sessions and reports paper results. Use when the user wants to forward-test a setup, see what would happen if they traded it now, or review their paper trading results.
+description: Paper trade on live Groww data - run the scanner, exit planner, sizing and risk gate during market hours and record simulated fills and exits without sending any order; replay past sessions; report paper results; and review the bot's activity, health and P&L from MongoDB. Use when the user wants to forward-test a setup, asks how today or this week went, what the bot did and when, why a trade was blocked, or whether the bot is running.
 ---
 
 # Groww Paper Trading
@@ -37,7 +37,7 @@ Journal statuses: `pending`, `open`, `closed`, `blocked` (risk gate said no, or 
 
 - **Pause** (`gtrade.py pause`, or `/pause` in Telegram) is a file, `trader/PAUSED`. While it exists, new triggers are recorded as blocked with reason `paused`, unfilled ideas are cancelled, and open positions still run to their stop, target or flat-by. If the user asks to stop the bot taking trades, pausing is the safe first step.
 - **Telegram** (optional, `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`): alerts for signals, fills, exits, blocks, data errors and a closing summary; commands `/status`, `/report`, `/pause`, `/resume`, `/help`, accepted only from the owner's chat. Setup: `gtrade.py telegram setup`, then `gtrade.py telegram test`.
-- **MongoDB** (optional, `GTRADE_MONGO_URI`): each step is mirrored for `groww-review`.
+- **MongoDB** (optional, `GTRADE_MONGO_URI`): each step is mirrored to MongoDB. To answer questions from it ("how did today go", "is the bot running", "why was X blocked", dashboards), read `reference/review-mongodb.md` first and use the MongoDB tools read-only.
 
 None of these can stop or slow the trading loop: they're best-effort with short timeouts.
 
@@ -45,6 +45,7 @@ None of these can stop or slow the trading loop: they're best-effort with short 
 
 - From `paper report`: number of paper days, trades, win rate, net after charges, charges paid, max drawdown, P&L by day, and how many ideas were blocked or missed.
 - Under ~2 weeks or ~30 trades, say plainly that it's too early to conclude anything.
-- Compare with `groww-backtest` over the same dates. If paper is clearly worse, the backtest was flattering the rule.
+- Compare with the backtest over the same dates (`groww-check-idea`). If paper is clearly worse, the backtest was flattering the rule.
+- When asked what the bot did, give a timeline in IST: start, each signal, fill, block and exit with prices and reasons, data errors, and the close.
 - Paper fills are still kinder than real ones: real orders can fill late, partially or worse in fast moves. Paper profits are a best case.
-- Don't suggest switching to live trading because paper results look good. That decision is the user's, and live orders will need a static IP registered with Groww and a separate broker step that asks for a yes on every order.
+- Don't suggest switching to live trading because paper results look good. This toolkit has no way to place orders, by design.

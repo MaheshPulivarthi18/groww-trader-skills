@@ -61,3 +61,34 @@ def net_pnl(side: str, entry: float, exit_: float, qty: int,
         gross = (entry - exit_) * qty
         c = round_trip(exit_, entry, qty, charges, product)
     return {"gross": round(gross, 2), "charges": c["total"], "net": round(gross - c["total"], 2)}
+
+
+
+def break_even(value: float, charges: Dict[str, Any], product: str = "MIS",
+               stop_pct: float = 0.0, slippage_pct: float = 0.0) -> Dict[str, Any]:
+    """What one round trip of `value` rupees costs (bought and sold at the
+    same price), and how far the price must move before the trade makes a
+    rupee. With stop_pct, also how the costs compare with the money at risk.
+    Charges are linear in value except brokerage's Rs 5 floor and Rs 20 cap,
+    so computing them on value directly (price 1, qty = value) is exact."""
+    c = _round_trip_value(value, charges, product)
+    slip = round(value * 2 * slippage_pct / 100, 2)
+    out: Dict[str, Any] = {
+        "trade_value": round(value, 2),
+        "product": "intraday (MIS)" if product.upper() == "MIS" else "delivery (CNC)",
+        "charges": c,
+        "break_even_move_pct": round(100 * c["total"] / value, 3) if value else None,
+    }
+    if slippage_pct:
+        out["slippage_estimate"] = slip
+        out["break_even_with_slippage_pct"] = round(100 * (c["total"] + slip) / value, 3) if value else None
+    if stop_pct and value:
+        risk = value * stop_pct / 100
+        out["risk_at_stop"] = round(risk, 2)
+        out["costs_as_pct_of_risk"] = round(100 * (c["total"] + slip) / risk, 1)
+    return out
+
+
+def _round_trip_value(value: float, charges: Dict[str, Any], product: str) -> Dict[str, float]:
+    # one "share" priced at the whole value: per-order brokerage floor/cap apply correctly
+    return round_trip(value, value, 1, charges, product)

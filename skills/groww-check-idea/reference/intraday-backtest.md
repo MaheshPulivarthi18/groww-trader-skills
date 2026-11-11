@@ -1,13 +1,8 @@
----
-name: groww-backtest
-description: Replay a setup and its exit rules over past NSE sessions with Groww historical candles, after slippage and Indian charges, and show win rate, net P&L, drawdown and a resampled range of outcomes for the next trades. Use when the user asks whether a setup works, wants to test a strategy, or before risking real money on one.
----
-
 # Groww Backtest
 
 Answers "how did this exact rule do on this stock, after costs?" Writes `trader/backtest.json`.
 
-`gtrade.py` is in the repository root, two folders above this SKILL.md.
+`gtrade.py` is in the repository root, three folders above this file.
 
 ```
 python3 <repo>/gtrade.py backtest SBIN --setup orb --days 60 --write

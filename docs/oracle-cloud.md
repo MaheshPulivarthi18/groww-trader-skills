@@ -119,7 +119,7 @@ env -i HOME=$HOME sh -c 'cd $HOME/trading && . $HOME/.groww_env && $HOME/venv/bi
 
 Watch it: `tail -f ~/trading/trader/logs/paper-$(date +%F).log`.
 
-One thing the server can't report is its own death (VM stopped, reclaimed or out of network): then nothing runs and nothing alerts. Check the MongoDB heartbeat from elsewhere, e.g. ask Claude "is the bot running?" with the `groww-review` skill, or a scheduled check that does the same.
+One thing the server can't report is its own death (VM stopped, reclaimed or out of network): then nothing runs and nothing alerts. Check the MongoDB heartbeat from elsewhere, e.g. ask Claude "is the bot running?" with the `groww-paper` skill, or a scheduled check that does the same.
 
 ## 10. Keep the VM
 

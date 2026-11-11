@@ -1,13 +1,8 @@
----
-name: groww-exit
-description: Plan the stop-loss, target and flat-by time for triggered setups BEFORE any entry, from trader/scan.json, writing trader/plan.json. Use when the user asks where to put the stop, what the target is, or how to exit a setup the scanner found.
----
-
 # Groww Exit Planner
 
 Every trade gets its exit decided before entry. Reads `trader/scan.json`, writes `trader/plan.json`.
 
-`gtrade.py` is in the repository root, two folders above this SKILL.md.
+`gtrade.py` is in the repository root, three folders above this file.
 
 ```
 python3 <repo>/gtrade.py plan --write                          # rules from config "exit"
@@ -34,4 +29,4 @@ Each setup can have its own rules: `setups.<name>.exit` in the config overrides 
 
 ## How to report
 
-For each plan: side, entry, stop, target, risk per share, reward:risk, flat-by. Remind the user a stop is a plan, not a guarantee: in a fast market or a gap, the fill can be worse. Next step: `groww-budget` to size it.
+For each plan: side, entry, stop, target, risk per share, reward:risk, flat-by. Remind the user a stop is a plan, not a guarantee: in a fast market or a gap, the fill can be worse. Next step: sizing (`reference/sizing.md`) to size it.

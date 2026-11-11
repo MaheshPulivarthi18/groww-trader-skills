@@ -1,13 +1,8 @@
----
-name: groww-portfolio
-description: Test slow, multi-stock portfolio strategies from the research literature (cross-sectional momentum with a market-regime filter, low volatility, dual momentum between index and gold ETFs) on NSE daily data, after delivery charges, against simply holding the Nifty ETF, with an honest train/test split. Use when the user asks about momentum, factor, rotation or long-term systematic strategies, or wants something more mature than intraday rules.
----
-
 # Groww Portfolio
 
 Mature systematic strategies rank many stocks, hold a handful, rebalance slowly (monthly) and are judged against the index. This is the tool for them.
 
-`gtrade.py` is in the repository root, two folders above this SKILL.md.
+`gtrade.py` is in the repository root, three folders above this file.
 
 ```
 # data: a universe plus the benchmark ETF, daily candles, as far back as Groww gives
