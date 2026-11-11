@@ -327,7 +327,16 @@ def cmd_paper(args, cfg):
         out(paper.report(journal))
         return
 
-    src = get_source(args.source, cfg["exchange"])
+    # Connect to Groww only once we know this copy will actually trade: the
+    # cron safety net starts a copy every 10 minutes, and each Groww login
+    # counts against the rate limit the running copy needs.
+    src_box = []
+
+    def source():
+        if not src_box:
+            src_box.append(get_source(args.source, cfg["exchange"]))
+        return src_box[0]
+
     if not cfg.get("paper", True):
         print("note: config has paper=false, but this command only ever simulates. No orders are sent.")
     from groww_trader import notify, runner
@@ -336,7 +345,7 @@ def cmd_paper(args, cfg):
 
     def one_step(now):
         journal = read_json("journal.json", [])
-        data, errors = _paper_data(src, symbols, interval)
+        data, errors = _paper_data(source(), symbols, interval)
         paused = notify.is_paused()
         journal, events = paper.step(cfg, data, now, journal, interval, paused=paused)
         write_json("journal.json", journal)
@@ -407,9 +416,17 @@ def cmd_paper(args, cfg):
         lock.release()
         return
     log_path = runner.daily_log(now) if not args.no_log else None
+    try:
+        source()
+    except Exception:
+        lock.release()
+        raise
     st = runner.mark_start(now)
     print(f"[{now:%H:%M}] Paper trading {', '.join(symbols)} on {interval}-minute bars. "
           f"No orders are sent.{' (restart)' if st['restart'] else ''}", flush=True)
+    print(f"[{now:%H:%M}] Telegram alerts: "
+          + ("on" if tg.enabled else "OFF (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set for this process)"),
+          flush=True)
     if tg.enabled:
         if st["restart"]:
             last = st.get("last_step")

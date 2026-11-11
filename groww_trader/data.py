@@ -188,7 +188,8 @@ class GrowwSource:
         except ImportError as e:  # pragma: no cover - depends on user env
             raise RuntimeError("The official Groww SDK is not installed: pip install growwapi") from e
         self._GrowwAPI = GrowwAPI
-        self.client = GrowwAPI(self._access_token(GrowwAPI))
+        # Login is rate limited too; retry it like data calls.
+        self.client = GrowwAPI(with_retry(lambda: self._access_token(GrowwAPI), first_wait=2.0))
         self.exchange = exchange
         self.segment = segment
 
