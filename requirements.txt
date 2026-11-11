@@ -1,3 +1,0 @@
-growwapi
-pyotp
-pymongo  # optional: MongoDB mirror
