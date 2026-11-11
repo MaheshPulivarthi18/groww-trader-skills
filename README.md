@@ -76,6 +76,7 @@ python3 gtrade.py check                                         # read-only cred
 python3 gtrade.py fetch --days 60                               # cache 5-min candles for the watchlist
 python3 gtrade.py backtest SBIN --setup orb --source csv        # how did one rule do, after costs?
 python3 gtrade.py backtest --days 365 --source csv              # whole watchlist as one account, with your limits
+python3 gtrade.py backtest --days 365 --source csv --baseline 500   # does the signal beat random entry timing?
 python3 gtrade.py sweep --source csv                            # many rules, judged on unseen data
 python3 gtrade.py scan --write && python3 gtrade.py plan --write
 python3 gtrade.py size --write && python3 gtrade.py risk --write

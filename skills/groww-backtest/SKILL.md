@@ -14,6 +14,7 @@ python3 <repo>/gtrade.py backtest SBIN --setup orb --days 60 --write
 python3 <repo>/gtrade.py backtest SBIN --setup pdh_breakout --stop level --target 2R
 python3 <repo>/gtrade.py backtest SBIN --source csv --trades     # offline, list every trade
 python3 <repo>/gtrade.py backtest --days 365 --source csv         # no symbol: whole watchlist as ONE account
+python3 <repo>/gtrade.py backtest --days 365 --source csv --baseline 500   # ...and compare with random entry timing
 ```
 
 Groww serves 5-minute candles in windows of up to 30 days per request; the tool splits longer ranges and caches them in `trader/data/`.
@@ -43,3 +44,10 @@ Groww serves 5-minute candles in windows of up to 30 days per request; the tool 
 - Never present a good backtest as a reason to trade live. Suggest paper trading it next, and testing the same rule on other stocks and other months to see if it holds.
 
 With no symbol, every watchlist stock is tested and the trades are merged in time order with the account limits from config (max open positions, trades per day, daily loss limit), as the paper bot applies them. Report `stats`, `return_on_capital_pct` and `skipped_by_limits`.
+
+## Random-entry baseline (`--baseline 500`)
+
+The most important check. Every real trade gets random-timed twins: same stock, day, side, quantity, stop % and target R, entered at a random bar in the entry window, with the same fills and charges. 500 runs give the range pure chance produces. Read `vs_random_entries`:
+- `beats_random: true` (5% or fewer random runs did as well): the entry signal carries information. Then look at whether it survives charges.
+- otherwise: no evidence the signal beats random timing. Say so plainly: tuning stops and targets of a rule with no entry edge is curve-fitting.
+Lead the report with this verdict before any profit figure.

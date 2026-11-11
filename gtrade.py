@@ -259,6 +259,10 @@ def cmd_backtest(args, cfg):
     res["rules"] = {"setup": args.setup, "shorts": bool(cfg.get("allow_short")), **exit_rules(cfg, args.setup),
                     "setup_params": setup_params(cfg, args.setup)}
     res["outlook"] = bt.bootstrap(res["trades"], next_n=args.next)
+    if args.baseline:
+        from groww_trader import baseline
+        res["vs_random_entries"] = baseline.compare(res["trades"], {symbol: candles}, cfg, args.setup,
+                                                    interval, runs=args.baseline)
     if args.write:
         write_json("backtest.json", res)
         get_store().save_backtest(res)
@@ -272,10 +276,11 @@ def _backtest_account(args, cfg, src, interval):
     """Whole watchlist, one account: per-stock trades merged in time order
     with the account limits from config (open positions, trades per day,
     daily loss)."""
-    every, per_stock, errors = [], {}, {}
+    every, per_stock, errors, candles = [], {}, {}, {}
     for s in [w.upper() for w in cfg["watchlist"]]:
         try:
-            res = bt.run(s, get_candles(src, s, interval, args.days), args.setup, cfg, interval)
+            candles[s] = get_candles(src, s, interval, args.days)
+            res = bt.run(s, candles[s], args.setup, cfg, interval)
         except Exception as e:
             errors[s] = str(e)
             continue
@@ -304,6 +309,9 @@ def _backtest_account(args, cfg, src, interval):
         "outlook": bt.bootstrap(kept, next_n=args.next),
         "data_errors": errors,
     }
+    if args.baseline:
+        from groww_trader import baseline
+        res["vs_random_entries"] = baseline.compare(kept, candles, cfg, args.setup, interval, runs=args.baseline)
     if args.trades:
         res["trades"] = kept
     if args.write:
@@ -854,6 +862,8 @@ def main(argv=None):
     p.add_argument("--next", type=int, default=20, help="trades to project in the outlook")
     p.add_argument("--trades", action="store_true", help="include every trade in the output")
     p.add_argument("--shorts", action="store_true", help="also take short trades (intraday MIS only)")
+    p.add_argument("--baseline", type=int, default=0, metavar="RUNS",
+                   help="compare with RUNS sets of random-timed entries (try 500)")
     p.add_argument("--write", action="store_true")
     p = sub.add_parser("paper", help="simulated trading on live data; never sends orders")
     p.set_defaults(fn=cmd_paper)

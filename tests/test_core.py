@@ -438,3 +438,48 @@ def test_account_limits_skip_overlapping_and_daily_loss():
     cfg["risk"]["daily_loss_limit"] = 1000
     kept, skipped = btm.apply_account_limits(trades, cfg)
     assert [t["symbol"] for t in kept] == ["A", "C"] and skipped["trades-per-day limit"] == 1
+
+
+def test_random_baseline_on_random_walk_finds_no_edge():
+    import random as _r
+    from datetime import date as _d
+    from fixtures import random_days
+    from groww_trader import backtest as btm, baseline
+    from groww_trader.config import DEFAULTS
+    import copy
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["setups"] = {"orb": {"range_min": 15, "min_range_pct": 0.1, "max_range_pct": 5.0}}
+    candles = {}
+    trades = []
+    for i, s in enumerate(["AAA", "BBB", "CCC"]):
+        candles[s] = random_days(_d(2026, 1, 5), 120, seed=40 + i, price=500)
+        trades += btm.run(s, candles[s], "orb", cfg, 5)["trades"]
+    assert len(trades) >= 10
+    res = baseline.compare(trades, candles, cfg, "orb", 5, runs=60)
+    assert res["trades_compared"] == len(trades)
+    assert res["random_net"]["p05"] <= res["random_net"]["median"] <= res["random_net"]["p95"]
+    # a random walk has no signal: the rule must not "beat" random timing
+    assert res["beats_random"] is False
+
+
+def test_random_twin_keeps_stop_pct_and_r():
+    import random as _r
+    from datetime import date as _d
+    from fixtures import random_days
+    from groww_trader import baseline
+    from groww_trader.config import DEFAULTS
+    from groww_trader.market import by_session
+    import copy
+    cfg = copy.deepcopy(DEFAULTS)
+    day_bars = list(by_session(random_days(_d(2026, 2, 2), 1, seed=3, price=1000)).values())[0]
+    t = {"side": "BUY", "qty": 10, "entry": 1000.0, "stop": 990.0, "target": 1015.0,
+         "entry_time": day_bars[5].ts.isoformat(), "net": 0, "gross": 0}
+    seen = set()
+    rng = _r.Random(1)
+    for _ in range(20):
+        r = baseline.twin(t, day_bars, cfg, "orb", 5, rng)
+        assert r is not None and "net" in r
+        # loss can't exceed 1% stop * qty * price by much (slippage, charges, gaps aside)
+        assert r["gross"] > -10 * 1000 * 0.02
+        seen.add(round(r["gross"], 2))
+    assert len(seen) > 1  # different random entries give different results
