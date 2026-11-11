@@ -402,3 +402,23 @@ class ParseStats(unittest.TestCase):
         out = parse_candle_rows(rows, st)
         self.assertEqual([c.open for c in out], [1082.0, 1082.0, 1090.0])
         self.assertEqual(st, {"open_filled": 3, "kept": 3})
+
+
+class RateLimitRetry(unittest.TestCase):
+    def test_retries_rate_limit_only(self):
+        from groww_trader.data import with_retry
+        calls, waits = [], []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) < 3:
+                raise RuntimeError("The rate limit for the Groww API has been exceeded. Please try again later.")
+            return "ok"
+        self.assertEqual(with_retry(flaky, sleep=waits.append), "ok")
+        self.assertEqual(waits, [1.0, 2.0])
+
+        def broken():
+            raise RuntimeError("invalid symbol")
+        with self.assertRaises(RuntimeError):
+            with_retry(broken, sleep=waits.append)
+        self.assertEqual(waits, [1.0, 2.0])  # no waiting on other errors

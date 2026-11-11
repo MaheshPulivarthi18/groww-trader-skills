@@ -159,6 +159,26 @@ class CSVSource:
         return out
 
 
+def is_rate_limited(e: Exception) -> bool:
+    msg = str(e).lower()
+    return "rate limit" in msg or "too many requests" in msg or "429" in msg
+
+
+def with_retry(call, tries: int = 4, first_wait: float = 1.0, sleep=None):
+    """Retry a Groww call that hit the rate limit, waiting 1s, 2s, 4s.
+    Other errors are raised at once."""
+    sleep = sleep or _time.sleep
+    wait = first_wait
+    for k in range(tries):
+        try:
+            return call()
+        except Exception as e:
+            if k == tries - 1 or not is_rate_limited(e):
+                raise
+            sleep(wait)
+            wait *= 2
+
+
 class GrowwSource:
     name = "groww"
 
@@ -215,14 +235,14 @@ class GrowwSource:
             t1 = min(t0 + step, end)
             windows += 1
             try:
-                resp = self.client.get_historical_candles(
+                resp = with_retry(lambda: self.client.get_historical_candles(
                     exchange=self._const("EXCHANGE", self.exchange),
                     segment=self._const("SEGMENT", self.segment),
                     groww_symbol=f"{self.exchange.upper()}-{symbol.upper()}",
                     start_time=t0.strftime("%Y-%m-%d %H:%M:%S"),
                     end_time=t1.strftime("%Y-%m-%d %H:%M:%S"),
                     candle_interval=self._interval_const(interval_min),
-                )
+                ))
             except Exception as e:
                 # Old windows may be beyond what Groww keeps for this interval:
                 # note it and keep going, so a long --days still gets what exists.
