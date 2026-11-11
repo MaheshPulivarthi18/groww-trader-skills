@@ -1,6 +1,6 @@
 {
   "name": "groww-trader-skills",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Check whether a trading idea for Indian stocks really works before risking money: tests on NSE data with your own Groww account, after real charges, against random entry timing, with a pass/fail scorecard. Charges calculator, research and paper trading. Never places orders (enforced in code). Not financial advice.",
   "author": {"name": "MaheshPulivarthi18"},
   "repository": "https://github.com/MaheshPulivarthi18/groww-trader-skills",

@@ -158,3 +158,69 @@ class Benchmarks(unittest.TestCase):
         ga = m.cf["A"][240] / m.cf["A"][120] - 1
         gb = m.cf["B"][240] / m.cf["B"][120] - 1
         self.assertTrue(min(ga, gb) - 0.01 < ew < max(ga, gb) + 0.01)
+
+
+class RandomPicks(unittest.TestCase):
+    def setUp(self):
+        self.cfg = load_config("/nonexistent")
+
+    def _run(self, growths, top=1):
+        data = {f"S{k}": series(g, n=700) for k, g in enumerate(growths)}
+        data["IDX"] = series(0.0005, n=700)
+        m = pf.build_market(data, "IDX")
+        base = {"strategy": "momentum", "universe": [s for s in data if s != "IDX"], "benchmark": "IDX",
+                "lookback": 100, "skip": 0, "top": top, "weight": "equal", "regime": "off"}
+        return pf.evaluate(m, base, self.cfg, capital=100000, baseline_runs=40)
+
+    def test_real_selection_beats_random(self):
+        # 30 stocks, hold the best 3: matching that by chance is very unlikely
+        res = self._run([-0.0005 + k * 0.0001 for k in range(30)], top=3)
+        vr = res["test"]["vs_random_picks"]
+        self.assertTrue(vr["beats_random"], vr)
+        self.assertLess(vr["random_total_pct"]["median"], vr["strategy_total_pct"])
+        self.assertIn("beat random picks", res["verdict"])
+
+    def test_one_pick_from_few_stocks_cant_be_told_from_luck(self):
+        # never rotates, 1 of 5: a random pick matches it about 1 run in 5
+        res = self._run([0.002, 0.0012, 0.0008, 0.0004, 0.0001])
+        self.assertFalse(res["test"]["vs_random_picks"]["beats_random"])
+
+    def test_no_selection_edge_when_all_stocks_are_alike(self):
+        res = self._run([0.001] * 5)
+        vr = res["test"]["vs_random_picks"]
+        self.assertFalse(vr["beats_random"], vr)
+        self.assertIn("added nothing", res["verdict"])
+
+
+class PortfolioWalkForward(unittest.TestCase):
+    def test_folds_roll_forward_and_chain(self):
+        cfg = load_config("/nonexistent")
+        data = {f"S{k}": series(0.0002 * k, n=900) for k in range(6)}
+        data["IDX"] = series(0.0005, n=900)
+        m = pf.build_market(data, "IDX")
+        base = {"strategy": "momentum", "universe": [f"S{k}" for k in range(6)], "benchmark": "IDX",
+                "lookback": 100, "skip": 0, "top": 2, "weight": "equal", "regime": "off"}
+        variants = [{"strategy": "momentum", "lookback": lb, "top": n} for lb in (60, 100) for n in (1, 2)]
+        wf = pf.walk_forward(m, base, variants, cfg, train_days=200, test_days=150)
+        self.assertGreaterEqual(wf["windows"], 3)
+        for a, b in zip(wf["folds"], wf["folds"][1:]):
+            self.assertLess(a["test"][1], b["test"][0])
+        for f in wf["folds"]:
+            self.assertLess(f["train"][1], f["test"][0])
+        self.assertIn("benchmark", wf["verdict"])
+
+
+class PortfolioTax(unittest.TestCase):
+    def test_rotation_pays_short_term_tax_buy_and_hold_long_term(self):
+        cfg = load_config("/nonexistent")
+        data = {"A": series(0.002, n=700), "B": series(0.0015, n=700), "IDX": series(0.001, n=700)}
+        m = pf.build_market(data, "IDX")
+        p = {"strategy": "momentum", "universe": ["A", "B"], "benchmark": "IDX", "lookback": 100, "skip": 0,
+             "top": 1, "weight": "equal", "regime": "off", "rebalance": "monthly"}
+        r = pf.run_period(m, p, cfg, 150, 650, 1_000_000)
+        s, b = r["strategy"], r["etf"]
+        self.assertGreater(s["tax"], 0)
+        self.assertLess(s["after_tax_return_pct"], s["total_return_pct"])
+        # the ETF is held ~2 years: long-term, and only gains above Rs 1.25L are taxed
+        self.assertEqual(b["short_term_gains"], 0)
+        self.assertLess(b["tax"], (b["final"] - 1_000_000) * 0.125 * 1.04 + 1)

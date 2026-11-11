@@ -50,6 +50,25 @@ def _stop(entry: float, rule: str, atr_val: Optional[float]) -> Optional[float]:
     raise ValueError(f"swing stop must be pct:<n> or atr:<n>, not {rule!r}")
 
 
+def walk(days: List[Candle], i: int, stop: float, target: Optional[float], hold: int,
+         slip: float, extra: float):
+    """Signal on day i: buy at day i+1's open, then stop, target or time.
+    Returns (entry, exit_price, reason, exit_index); reason None if the data
+    ends before the trade could start."""
+    if i + 1 >= len(days):
+        return None, None, None, None
+    entry = slipped(days[i + 1].open, "BUY", "entry", slip)
+    for k in range(i + 1, min(i + 1 + hold, len(days))):
+        b = days[k]
+        if b.low <= stop:
+            return entry, slipped(min(b.open, stop), "BUY", "exit", slip + extra), "stop", k
+        if target is not None and b.high >= target + TICK:
+            return entry, round(max(b.open, target), 2), "target", k
+        if k == i + hold or k == len(days) - 1:
+            return entry, slipped(b.close, "BUY", "exit", slip), ("time" if k == i + hold else "data_end"), k
+    return entry, None, None, None
+
+
 def run(symbol: str, candles: List[Candle], rule: Dict[str, Any], cfg: Dict[str, Any],
         from_day: Optional[date] = None, to_day: Optional[date] = None) -> Dict[str, Any]:
     days = daily(candles)
@@ -87,23 +106,14 @@ def run(symbol: str, candles: List[Candle], rule: Dict[str, Any], cfg: Dict[str,
             i += 1
             continue
         e_bar = days[i + 1]
-        entry = slipped(e_bar.open, "BUY", "entry", slip)
-        exit_px, reason, exit_i = None, None, None
-        for k in range(i + 1, min(i + 1 + hold, len(days))):
-            b = days[k]
-            if b.low <= stop:
-                exit_px, reason = slipped(min(b.open, stop), "BUY", "exit", slip + extra), "stop"
-            elif target is not None and b.high >= target + TICK:
-                exit_px, reason = round(max(b.open, target), 2), "target"
-            elif k == i + hold or k == len(days) - 1:
-                exit_px, reason = slipped(b.close, "BUY", "exit", slip), ("time" if k == i + hold else "data_end")
-            if reason:
-                exit_i = k
-                break
+        entry, exit_px, reason, exit_i = walk(days, i, stop, target, hold, slip, extra)
         if reason is None:
             break
         pnl = net_pnl("BUY", entry, exit_px, qty, c["charges"], "CNC")
-        trades.append({"symbol": symbol, "signal_day": str(d.ts.date()), "entry_day": str(e_bar.ts.date()),
+        trades.append({"symbol": symbol, "signal_day": str(d.ts.date()), "signal_close": d.close,
+                       "stop_pct": round(100 * risk / d.close, 4),
+                       "target_r": None if target is None else float(tgt_rule[:-1]),
+                       "entry_day": str(e_bar.ts.date()),
                        "exit_day": str(days[exit_i].ts.date()), "days_held": exit_i - i, "qty": qty,
                        "fill_entry": entry, "fill_exit": exit_px, "stop": stop, "target": target,
                        "exit_reason": reason, **pnl,
@@ -117,14 +127,24 @@ def grid(lookbacks, stops, targets, holds, trends) -> List[Dict[str, Any]]:
             for lb, s, t, h, tr in itertools.product(lookbacks, stops, targets, holds, trends)]
 
 
-def _summ(trades):
+def _summ(trades, cfg=None):
     s = stats(trades)
     keys = ("trades", "win_rate_pct", "net_total", "charges_total", "avg_net", "profit_factor", "max_drawdown")
-    return {k: s.get(k) for k in keys} if s.get("trades") else {"trades": 0, "net_total": 0.0}
+    if not s.get("trades"):
+        return {"trades": 0, "net_total": 0.0}
+    out = {k: s.get(k) for k in keys}
+    if cfg is not None:
+        from .tax import capital_gains_tax
+        realised = [(date.fromisoformat(t["exit_day"]), t["net"],
+                     (date.fromisoformat(t["exit_day"]) - date.fromisoformat(t["entry_day"])).days) for t in trades]
+        tax = capital_gains_tax(realised, cfg)["total_tax"]
+        out["tax"] = tax
+        out["net_after_tax"] = round(out["net_total"] - tax, 2)
+    return out
 
 
 def sweep(candles_by_symbol: Dict[str, List[Candle]], cfg: Dict[str, Any], rules: List[Dict[str, Any]],
-          train_frac: float = 0.6, min_trades: int = 8, top: int = 5) -> Dict[str, Any]:
+          train_frac: float = 0.6, min_trades: int = 8, top: int = 5, baseline_runs: int = 0) -> Dict[str, Any]:
     all_days = sorted({c.ts.date() for cs in candles_by_symbol.values() for c in daily(cs)})
     if len(all_days) < 120:
         raise ValueError(f"only {len(all_days)} days of daily data; fetch more "
@@ -137,11 +157,18 @@ def sweep(candles_by_symbol: Dict[str, List[Candle]], cfg: Dict[str, Any], rules
         for sym, cs in candles_by_symbol.items():
             tr_t += run(sym, cs, rule, cfg, to_day=train_end)["trades"]
             te_t += run(sym, cs, rule, cfg, from_day=cut)["trades"]
-        rows.append({"rule": rule, "train": _summ(tr_t), "test": _summ(te_t)})
+        rows.append({"rule": rule, "train": _summ(tr_t, cfg), "test": _summ(te_t, cfg)})
     eligible = [r for r in rows if r["train"]["trades"] >= min_trades]
     ranked = sorted(eligible, key=lambda r: r["train"]["net_total"], reverse=True)
     best = ranked[0] if ranked else None
     held = sum(1 for r in ranked[:top] if r["test"]["net_total"] > 0)
+    if best and baseline_runs:
+        for name, kw in (("train", {"to_day": train_end}), ("test", {"from_day": cut})):
+            tr = []
+            for sym, cs in candles_by_symbol.items():
+                tr += run(sym, cs, best["rule"], cfg, **kw)["trades"]
+            best[name]["vs_random_entries"] = random_baseline(tr, candles_by_symbol, best["rule"], cfg,
+                                                              runs=baseline_runs, **kw)
     return {"symbols": sorted(candles_by_symbol),
             "split": {"train_until": str(train_end), "test_from": str(cut), "train_frac": train_frac},
             "variants_tested": len(rows), "eligible": len(eligible), "min_trades": min_trades,
@@ -150,3 +177,52 @@ def sweep(candles_by_symbol: Dict[str, List[Candle]], cfg: Dict[str, Any], rules
             "verdict": verdict(best, held, min(top, len(ranked)),
                                next_step="Worth tracking on paper for a few months (swing trades take weeks)."),
             "all": rows}
+
+
+def random_baseline(trades: List[Dict[str, Any]], candles_by_symbol: Dict[str, List[Candle]],
+                    rule: Dict[str, Any], cfg: Dict[str, Any], from_day: Optional[date] = None,
+                    to_day: Optional[date] = None, runs: int = 200, seed: int = 17) -> Dict[str, Any]:
+    """Replay every real swing trade with a random signal day on the same stock
+    within the same period: same stop %, target R, holding limit, rupee size,
+    fills and delivery charges. Does the breakout pick better days than chance?"""
+    import random
+    if len(trades) < 10:
+        return {"note": "fewer than 10 trades: too few to compare with random entries"}
+    c = copy.deepcopy(cfg)
+    slip = c.get("slippage_pct", 0.0) / 100
+    extra = fill_params(c)["stop_extra_slippage_pct"] / 100
+    hold = int(rule["hold"])
+    series = {s: daily(cs) for s, cs in candles_by_symbol.items()}
+    allowed = {}
+    for s, days in series.items():
+        allowed[s] = [k for k in range(1, len(days) - 1)
+                      if (not from_day or days[k].ts.date() >= from_day) and (not to_day or days[k].ts.date() <= to_day)]
+    real = sum(t["net"] for t in trades)
+    rng = random.Random(seed)
+    totals = []
+    for _ in range(runs):
+        tot = 0.0
+        for t in trades:
+            days, ks = series.get(t["symbol"]), allowed.get(t["symbol"])
+            if not ks:
+                tot += t["net"]
+                continue
+            j = rng.choice(ks)
+            close = days[j].close
+            stop = round(close * (1 - t["stop_pct"] / 100), 2)
+            target = None if t.get("target_r") is None else round(close + t["target_r"] * (close - stop), 2)
+            entry, exit_px, reason, _ = walk(days, j, stop, target, hold, slip, extra)
+            if reason is None:
+                tot += t["net"]
+                continue
+            qty = max(1, round(t["qty"] * t["fill_entry"] / entry))
+            tot += net_pnl("BUY", entry, exit_px, qty, c["charges"], "CNC")["net"]
+        totals.append(tot)
+    totals.sort()
+    pct = lambda q: round(totals[min(runs - 1, int(q * runs))], 2)
+    share = sum(1 for x in totals if x >= real) / runs
+    return {"trades_compared": len(trades), "runs": runs, "seed": seed, "real_net": round(real, 2),
+            "random_net": {"p05": pct(0.05), "median": pct(0.5), "p95": pct(0.95)},
+            "share_of_random_runs_as_good_pct": round(100 * share, 1), "beats_random": share <= 0.05,
+            "method": "each trade replayed from a random signal day on the same stock in the same period; "
+                      "same stop %, target R, holding limit, rupee size, fills and delivery charges"}

@@ -483,3 +483,34 @@ def test_random_twin_keeps_stop_pct_and_r():
         assert r["gross"] > -10 * 1000 * 0.02
         seen.add(round(r["gross"], 2))
     assert len(seen) > 1  # different random entries give different results
+
+
+def test_random_baseline_detects_a_breakout_that_carries_information():
+    """Trend days: the price rises all day, so an opening-range breakout keeps going.
+    Other days: noise. The breakout only fires on trend days, so it should beat
+    entries at random times on random days."""
+    import random as _r
+    import copy
+    from datetime import date as _d, timedelta as _td
+    from fixtures import session_times
+    from groww_trader import backtest as btm, baseline
+    from groww_trader.config import DEFAULTS
+    from groww_trader.market import Candle as _C
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["setups"] = {"orb": {"range_min": 15, "min_range_pct": 0.4, "max_range_pct": 5.0}}
+    rng = _r.Random(9)
+    bars, p, d = [], 500.0, _d(2026, 1, 5)
+    while len(bars) < 120 * 75:
+        if d.weekday() < 5:
+            trend = rng.random() < 0.25  # trend days move from the open, so their range is wide
+            for k, ts in enumerate(session_times(d)):
+                drift = 0.0015 if trend else 0.0
+                o = p
+                c = o * (1 + drift + rng.gauss(0, 0.0006))
+                bars.append(_C(ts, round(o, 2), round(max(o, c) * 1.0004, 2), round(min(o, c) * 0.9996, 2), round(c, 2), 1000))
+                p = c
+        d += _td(days=1)
+    trades = btm.run("TRND", bars, "orb", cfg, 5)["trades"]
+    assert len(trades) >= 10
+    res = baseline.compare(trades, {"TRND": bars}, cfg, "orb", 5, runs=80)
+    assert res["beats_random"] is True, (res["random_gross"], res["share_of_random_runs_as_good_pct"])

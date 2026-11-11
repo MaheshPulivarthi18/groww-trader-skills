@@ -1,12 +1,18 @@
 """Random-entry baseline: does the signal beat entering at a random time?
 
-For every real trade, a "twin" is simulated on the same stock, same day and
-same side, with the same quantity, the same stop distance (as a % of price)
-and the same target in R, but entered at a random bar inside the allowed
-entry window. Exits, fills and charges follow exactly the backtest's rules.
-Repeating that many times gives the range of results that timing by pure
-chance produces. If the real rule doesn't land clearly above that range, its
-entry signal adds nothing.
+For every real trade, a "twin" is simulated on the same stock and side,
+with the same rupee size, the same stop distance (as a % of price) and the
+same target in R, but on a RANDOMLY CHOSEN OTHER SESSION of that stock in
+the tested period, entered at a random bar inside the allowed entry window
+(or, time-matched, near the same time of day as the real entry). Exits,
+fills and charges follow exactly the backtest's rules. Repeating that many
+times gives the range of results that chance produces. If the real rule
+doesn't land clearly above that range, its entry signal adds nothing.
+
+Why another day and not the same day: a random entry earlier on the real
+trade's own day would "know" a breakout was coming (the real trade only
+exists because one happened), which flatters the random side. Twins on
+unrelated days can't see the future.
 
 This isolates the ENTRY signal. A rule can beat random and still lose money
 after charges; a rule that doesn't beat random has no edge to build on.
@@ -31,21 +37,27 @@ def _window(cfg: Dict[str, Any], setup: str, day) -> tuple:
     return at(r["no_entry_before"]), at(r["no_entry_after"]), at(flat)
 
 
+def _minutes(ts) -> int:
+    return ts.hour * 60 + ts.minute
+
+
 def twin(trade: Dict[str, Any], bars: List[Candle], cfg: Dict[str, Any], setup: str,
-         interval_min: int, rng: random.Random) -> Optional[Dict[str, float]]:
-    """One random-timed copy of `trade` on the same session's bars."""
-    side, qty = trade["side"], trade["qty"]
+         interval_min: int, rng: random.Random, window_min: Optional[int] = None) -> Optional[Dict[str, float]]:
+    """One random-timed copy of `trade` on the session `bars` (another day)."""
+    side = trade["side"]
     entry0, stop0, target0 = trade["entry"], trade["stop"], trade["target"]
     risk = abs(entry0 - stop0)
-    if not risk or not entry0:
+    if not risk or not entry0 or not bars:
         return None
     stop_pct = risk / entry0
     r_mult = abs(target0 - entry0) / risk
-    day = parse_ts(trade["entry_time"]).date()
-    first_ok, last_ok, flat = _window(cfg, setup, day)
+    first_ok, last_ok, flat = _window(cfg, setup, bars[0].ts.date())
     # the signal bar must close inside the window; we enter on the next bar
     choices = [k for k in range(len(bars) - 1)
                if first_ok <= bars[k].ts < last_ok and bars[k + 1].ts < flat]
+    if window_min:  # time-matched: entries near the real entry's time of day
+        real = _minutes(parse_ts(trade["entry_time"]))
+        choices = [k for k in choices if abs(_minutes(bars[k + 1].ts) - real) <= window_min]
     if not choices:
         return None
     k = rng.choice(choices) + 1
@@ -58,6 +70,8 @@ def twin(trade: Dict[str, Any], bars: List[Candle], cfg: Dict[str, Any], setup: 
     if hit is None:
         hit = (bars[-1].close, "session_end", bars[-1].ts)
     px, reason, _ = hit
+    real_fill = trade.get("fill_entry") or entry0
+    qty = max(1, round(trade["qty"] * real_fill / entry))  # same rupee size
     pnl = net_pnl(side, entry, exit_price(px, reason, side, cfg), qty, cfg["charges"],
                   cfg.get("product", "MIS"))
     return {"net": pnl["net"], "gross": pnl["gross"]}
@@ -65,17 +79,22 @@ def twin(trade: Dict[str, Any], bars: List[Candle], cfg: Dict[str, Any], setup: 
 
 def compare(trades: List[Dict[str, Any]], candles_by_symbol: Dict[str, List[Candle]],
             cfg: Dict[str, Any], setup: str, interval_min: int,
-            runs: int = 500, seed: int = 11) -> Dict[str, Any]:
-    """Compare the real trades with `runs` sets of random-timed twins."""
+            runs: int = 500, seed: int = 11, window_min: Optional[int] = None) -> Dict[str, Any]:
+    """Compare the real trades with `runs` sets of random twins on other days."""
     if len(trades) < 10:
         return {"note": "fewer than 10 trades: too few to compare with random entries"}
-    sessions = {s: by_session(c) for s, c in candles_by_symbol.items()}
+    first = min(t["day"] for t in trades)
+    last = max(t["day"] for t in trades)
+    pools = {}
+    for s, c in candles_by_symbol.items():
+        ses = by_session(c)
+        pools[s] = [ses[d] for d in sorted(ses) if first <= str(d) <= last]
     rng = random.Random(seed)
     jobs = []
     for t in trades:
-        bars = sessions.get(t["symbol"], {}).get(parse_ts(t["entry_time"]).date())
-        if bars:
-            jobs.append((t, bars))
+        pool = [b for b in pools.get(t["symbol"], []) if str(b[0].ts.date()) != t["day"]]
+        if pool:
+            jobs.append((t, pool))
     if len(jobs) < 10:
         return {"note": "price data for the trades' days is missing"}
     real_net = sum(t["net"] for t, _ in jobs)
@@ -83,8 +102,12 @@ def compare(trades: List[Dict[str, Any]], candles_by_symbol: Dict[str, List[Cand
     nets, grosses = [], []
     for _ in range(runs):
         n = g = 0.0
-        for t, bars in jobs:
-            r = twin(t, bars, cfg, setup, interval_min, rng)
+        for t, pool in jobs:
+            r = None
+            for _try in range(5):  # a random other day with a usable entry bar
+                r = twin(t, rng.choice(pool), cfg, setup, interval_min, rng, window_min)
+                if r is not None:
+                    break
             if r is None:  # no other entry bar that day: count the real trade
                 r = {"net": t["net"], "gross": t["gross"]}
             n += r["net"]
@@ -118,7 +141,10 @@ def compare(trades: List[Dict[str, Any]], candles_by_symbol: Dict[str, List[Cand
         "share_of_random_runs_as_good_pct": round(100 * as_good, 1),
         "beats_random": beat,
         "verdict": verdict,
-        "method": "each real trade replayed on the same stock and day, same side, quantity, "
-                  "stop % and target R, entered at a random bar in the entry window; "
-                  "same fills and charges",
+        "time_matched_min": window_min,
+        "method": "each real trade replayed on a random other session of the same stock in the period, "
+                  "same side, rupee size, stop % and target R, entered at a random bar "
+                  + (f"within {window_min} minutes of the real entry's time of day" if window_min
+                     else "in the entry window")
+                  + "; same fills and charges",
     }

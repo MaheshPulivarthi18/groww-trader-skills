@@ -62,3 +62,34 @@ class Sweep(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WalkForwardAndLuck(unittest.TestCase):
+    def test_luck_bar_grows_with_variations(self):
+        from groww_trader import sweep as sw
+        self.assertEqual(sw.luck_bar(1), 0.0)
+        self.assertAlmostEqual(sw.luck_bar(68), 2.9, places=1)
+        self.assertGreater(sw.luck_bar(1000), sw.luck_bar(68))
+        self.assertIsNone(sw.t_stat([1.0, 2.0]))
+        self.assertGreater(sw.t_stat([10, 12, 9, 11, 10]), 5)
+        lc = sw.luck_check({"train": {"t_stat": 1.5}}, 68)
+        self.assertFalse(lc["clears_luck_bar"])
+        self.assertTrue(sw.luck_check({"train": {"t_stat": 4.0}}, 68)["clears_luck_bar"])
+
+    def test_walk_forward_never_tests_on_chosen_data(self):
+        import sys as _s
+        _s.path.insert(0, str(Path(__file__).resolve().parent))
+        from fixtures import random_days
+        from groww_trader import sweep as sw
+        from groww_trader.config import load_config
+        cfg = load_config("/nonexistent")
+        cfg["setups"] = {"orb": {"range_min": 15, "min_range_pct": 0.1, "max_range_pct": 5.0}}
+        data = {s: random_days(date(2026, 1, 5), 90, seed=k + 3) for k, s in enumerate(["AA", "BB"])}
+        vs = sw.variants(["orb"], None, ["1R", "2R"], None)
+        wf = sw.walk_forward(data, cfg, 5, vs, train_sessions=30, test_sessions=15, min_trades=3)
+        self.assertGreaterEqual(wf["windows"], 3)
+        for f in wf["folds"]:
+            self.assertLess(f["train"][1], f["test"][0])       # test strictly after train
+        tests = [tuple(f["test"]) for f in wf["folds"]]
+        self.assertEqual(len(tests), len(set(tests)))          # windows don't repeat
+        self.assertEqual(wf["out_of_sample"]["trades"], sum(f["test_trades"] for f in wf["folds"]))

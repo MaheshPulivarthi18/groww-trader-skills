@@ -16,8 +16,12 @@ Signal when the day's close is above the highest high of the previous `lookback`
 
 Defaults: lookbacks `20,55`; stops `pct:3,pct:5,atr:2` (daily ATR14); targets `2R,3R,none`; holds `10,20` days; trends `0,50`; train 60% of days; at least 8 train trades to rank.
 
+## Random entry days and tax
+
+The pick is compared with random entry days (`--baseline 200`, default): every trade is replayed from a random signal day on the same stock within the same period, with the same stop %, target, holding limit, rupee size and charges. Results also show **after tax** (swing trades are short-term: 20% + 4% cess on each financial year's net gains, estimated). For more history, use NSE data: `gtrade.py nse fetch --years 7`, `gtrade.py nse build`, then `--source nse`.
+
 ## How to report
 
-Same as the sweep (`reference/sweep.md`): say how many variations were tried, judge by the **test** column, give trade counts (swing produces few trades, so evidence is thin: call anything under ~30 test trades weak), and quote the verdict. Overlapping rules (e.g. with and without the trend filter) often give identical rows; that isn't extra evidence.
+Same as the sweep (`reference/sweep.md`): say how many variations were tried, judge by the **test** column, say whether the pick beat random entry days, quote the after-tax test figure, give trade counts (swing produces few trades, so evidence is thin: call anything under ~30 test trades weak), and quote the verdict. Overlapping rules (e.g. with and without the trend filter) often give identical rows; that isn't extra evidence.
 
 There is no swing paper-trading mode yet. If a rule survives, suggest the user tracks its signals by hand (or in a sheet) for a few months before trusting it. Never suggest live trading on a backtest.

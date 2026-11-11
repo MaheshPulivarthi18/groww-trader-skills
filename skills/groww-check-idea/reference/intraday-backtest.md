@@ -42,7 +42,7 @@ With no symbol, every watchlist stock is tested and the trades are merged in tim
 
 ## Random-entry baseline (`--baseline 500`)
 
-The most important check. Every real trade gets random-timed twins: same stock, day, side, quantity, stop % and target R, entered at a random bar in the entry window, with the same fills and charges. 500 runs give the range pure chance produces. Read `vs_random_entries`:
+The most important check. Every real trade gets random twins on randomly chosen *other* days of the same stock (never the trade's own day: an entry earlier that day would "know" the breakout was coming), same side, rupee size, stop % and target R, entered at a random bar in the entry window (or, with `--baseline-window 30`, within 30 minutes of the real entry's time of day), with the same fills and charges. 500 runs give the range pure chance produces. Read `vs_random_entries`:
 - `beats_random: true` (5% or fewer random runs did as well): the entry signal carries information. Then look at whether it survives charges.
 - otherwise: no evidence the signal beats random timing. Say so plainly: tuning stops and targets of a rule with no entry edge is curve-fitting.
 Lead the report with this verdict before any profit figure.

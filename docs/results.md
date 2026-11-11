@@ -38,14 +38,14 @@ An earlier 60-day test of the same families pointed the same way, and single-sto
 
 ### Against random entry timing (₹20,000 account)
 
-`gtrade.py backtest --days 365 --source csv --baseline 500`, the whole watchlist as one account: ₹20,000 capital, ₹200 max loss a trade, ₹400 a day, 1 position at a time, 2 trades a day, opening range at least 1%. Each real trade was replayed 500 times at a random entry time on the same stock and day, with the same stop %, target, fills and charges.
+`gtrade.py evaluate --setup orb --source csv`: the whole watchlist as one account (₹20,000 capital, ₹200 max loss a trade, ₹400 a day, 1 position at a time, 2 trades a day, opening range at least 1%).
 
-| rule | trades | before charges ₹ | charges ₹ | net ₹ | random runs as good or better |
-|---|---:|---:|---:|---:|---:|
-| `orb`, stop mid-range, 1.5R | 182 | −312 | 4,536 | −4,848 (−24%) | 98.2% (worse than random) |
-| `orb_fade`, stop beyond the failed move, 1.5R | 373 | −4,034 | 9,352 | −13,386 (−67%) | 62% (same as random) |
+| rule | trades | before charges ₹ | charges ₹ | net ₹ |
+|---|---:|---:|---:|---:|
+| `orb`, stop mid-range, 1.5R | 182 | −312 | 4,536 | −4,848 (−24%) |
+| `orb_fade`, stop beyond the failed move, 1.5R | 373 | −4,034 | 9,352 | −13,386 (−67%) |
 
-Neither entry beats random timing. Random long entries made about ₹6 a trade before charges (the market drifted up over the year) against about ₹25 of charges, so even random buying lost. Buying breakouts did slightly worse than random, but fading them wasn't better than random either, so this isn't a tradeable reversal; it is most likely time of day (breakout entries cluster in the choppy first hour). For intraday trades on these stocks, charges, not entry timing, decide the result. `gtrade.py costs` shows the break-even move for any trade size.
+**Correction (v0.8).** Our first random-entry comparison placed random entries on the *same day* as each real trade. Entries earlier that day "knew" a breakout was coming (the real trade exists only because one happened), which flattered the random side: on synthetic random-walk prices, entering 15 minutes before a breakout made about +₹35 a trade versus −₹8 at the breakout. That made `orb` look "worse than random (98%)". The baseline now uses random *other* days of the same stock; on random-walk prices it correctly lands in the middle (30-47%). The `orb` and `orb_fade` comparisons above are being re-run with the corrected baseline. The net results don't change: both lose after charges, and charges (about ₹25 a trade on ₹10,000) are larger than anything the entries make before costs. `gtrade.py costs` shows the break-even move for any trade size.
 
 ## Swing (delivery, CNC): closest, still negative
 

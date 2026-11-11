@@ -262,7 +262,7 @@ def cmd_backtest(args, cfg):
     if args.baseline:
         from groww_trader import baseline
         res["vs_random_entries"] = baseline.compare(res["trades"], {symbol: candles}, cfg, args.setup,
-                                                    interval, runs=args.baseline)
+                                                    interval, runs=args.baseline, window_min=args.baseline_window)
     if args.write:
         write_json("backtest.json", res)
         get_store().save_backtest(res)
@@ -272,7 +272,8 @@ def cmd_backtest(args, cfg):
         out({k: v for k, v in res.items() if k != "trades"})
 
 
-def account_backtest(cfg, src, interval, setup, days, symbols=None, baseline_runs=0, next_n=20):
+def account_backtest(cfg, src, interval, setup, days, symbols=None, baseline_runs=0, next_n=20,
+                     baseline_window=None):
     """Whole watchlist, one account: per-stock trades merged in time order
     with the account limits from config (open positions, trades per day,
     daily loss). Returns (result, kept_trades, calendar_days)."""
@@ -315,7 +316,8 @@ def account_backtest(cfg, src, interval, setup, days, symbols=None, baseline_run
     }
     if baseline_runs:
         from groww_trader import baseline
-        res["vs_random_entries"] = baseline.compare(kept, candles, cfg, setup, interval, runs=baseline_runs)
+        res["vs_random_entries"] = baseline.compare(kept, candles, cfg, setup, interval, runs=baseline_runs,
+                                                    window_min=baseline_window)
     return res, kept, calendar
 
 
@@ -330,7 +332,7 @@ def cmd_evaluate(args, cfg):
     src = get_source(args.source, cfg["exchange"])
     symbols = [x.upper() for x in args.symbols] if args.symbols else None
     res, kept, calendar = account_backtest(cfg, src, interval, args.setup, args.days, symbols=symbols,
-                                           baseline_runs=args.baseline)
+                                           baseline_runs=args.baseline, baseline_window=args.baseline_window)
     card = scorecard.build(res, kept, calendar)
     res["scorecard"] = card
     if args.write:
@@ -357,7 +359,8 @@ def cmd_evaluate(args, cfg):
 
 def _backtest_account(args, cfg, src, interval):
     res, kept, _ = account_backtest(cfg, src, interval, args.setup, args.days,
-                                    baseline_runs=args.baseline, next_n=args.next)
+                                    baseline_runs=args.baseline, next_n=args.next,
+                                    baseline_window=args.baseline_window)
     if args.trades:
         res["trades"] = kept
     if args.write:
@@ -621,6 +624,9 @@ def cmd_sweep(args, cfg):
                      [int(r) for r in split(args.ranges)] if args.ranges else None)
     try:
         res = sw.sweep(data, cfg, interval, vs, train_frac=args.train, min_trades=args.min_trades, top=args.top)
+        if args.walk_forward:
+            res["walk_forward"] = sw.walk_forward(data, cfg, interval, vs, train_sessions=args.wf_train,
+                                                  test_sessions=args.wf_test, min_trades=args.min_trades)
     except ValueError as e:
         sys.exit(f"error: {e}")
     res["data_errors"] = errors
@@ -645,6 +651,18 @@ def cmd_sweep(args, cfg):
         print(f"{name:38} {r['train']['trades']:>12} {r['train']['net_total']:>11.0f} "
               f"{r['test']['trades']:>11} {r['test']['net_total']:>10.0f}")
     print(f"\nVerdict: {res['verdict']}")
+    print(f"Luck check: {res['luck_check']['note']}")
+    wf = res.get("walk_forward")
+    if wf:
+        print(f"\nWalk-forward: choose on {wf['train_sessions']} sessions, trade the pick on the next "
+              f"{wf['test_sessions']}, roll forward ({wf['windows']} windows)")
+        for f in wf["folds"]:
+            v = f["pick"]
+            name = f"{v['setup']} stop={v['stop']} tgt={v['target']}" + (f" rng={v['range_min']}" if v.get("range_min") else "")
+            print(f"  test {f['test'][0]} to {f['test'][1]}: pick {name:34} Rs {f['test_net']:>8,.0f} "
+                  f"on {f['test_trades']} trades")
+        print(f"Out of sample in total: Rs {wf['out_of_sample']['net_total']:,.0f} on "
+              f"{wf['out_of_sample']['trades']} trades. {wf['verdict']}")
     if errors:
         print(f"Data errors: {errors}")
 
@@ -662,15 +680,18 @@ def cmd_swing(args, cfg):
     if not data:
         sys.exit(f"error: no daily data for any symbol: {errors}\n"
                  "Fetch it first: gtrade.py fetch --interval 1440 --days 1100")
-    from groww_trader import adjust
-    data, events = adjust.adjust_all(data)
+    events = []
+    if args.source != "nse":  # NSE data is already adjusted with NSE's own factors
+        from groww_trader import adjust
+        data, events = adjust.adjust_all(data)
     if events:
         print(f"Adjusted for {len(events)} corporate actions (splits, bonuses, demergers).")
     lst = lambda x, conv=str: [conv(p.strip()) for p in x.split(",") if p.strip()]
     rules = swing.grid(lst(args.lookbacks, int), lst(args.stops), lst(args.targets),
                        lst(args.holds, int), lst(args.trends, int))
     try:
-        res = swing.sweep(data, cfg, rules, train_frac=args.train, min_trades=args.min_trades, top=args.top)
+        res = swing.sweep(data, cfg, rules, train_frac=args.train, min_trades=args.min_trades, top=args.top,
+                          baseline_runs=args.baseline)
     except ValueError as e:
         sys.exit(f"error: {e}")
     res["data_errors"] = errors
@@ -685,15 +706,29 @@ def cmd_swing(args, cfg):
     print(f"Train (choose): up to {sp['train_until']}   Test (unseen): from {sp['test_from']}")
     print(f"{res['profitable_on_train']} of {res['eligible']} variations with >= {res['min_trades']} train trades "
           f"made money on train.\n")
-    head = f"{'rule':44} {'train trades':>12} {'train net':>11} {'test trades':>11} {'test net':>10}"
+    head = (f"{'rule':44} {'train trades':>12} {'train net':>11} {'test trades':>11} {'test net':>10} "
+            f"{'test after tax':>14}")
     print(head)
     print("-" * len(head))
     for r in res["top"]:
         v = r["rule"]
         name = f"hi{v['lookback']} stop={v['stop']} tgt={v['target']} hold={v['hold']}d" + \
             (f" sma{v['trend']}" if v["trend"] else "")
+        at = r["test"].get("net_after_tax")
         print(f"{name:44} {r['train']['trades']:>12} {r['train']['net_total']:>11.0f} "
-              f"{r['test']['trades']:>11} {r['test']['net_total']:>10.0f}")
+              f"{r['test']['trades']:>11} {r['test']['net_total']:>10.0f} {('—' if at is None else f'{at:.0f}'):>14}")
+    print("after tax: short-term capital gains tax (20% + 4% cess) on each financial year's net gains, estimated")
+    pick = res.get("pick") or {}
+    if "vs_random_entries" in pick.get("test", {}):
+        print("\nThe pick against random entry days (same stock, period, stop %, target, holding limit, charges):")
+        for name in ("train", "test"):
+            vr = pick[name]["vs_random_entries"]
+            if "random_net" not in vr:
+                print(f"  {name}: {vr.get('note')}")
+                continue
+            print(f"  {name}: real Rs {vr['real_net']:,.0f} vs random median Rs {vr['random_net']['median']:,.0f}; "
+                  f"{vr['share_of_random_runs_as_good_pct']}% of {vr['runs']} random runs did as well or better"
+                  f" -> {'BEATS random' if vr['beats_random'] else 'no better than random'}")
     print(f"\nVerdict: {res['verdict']}")
     if errors:
         print(f"Data errors: {errors}")
@@ -723,7 +758,7 @@ def cmd_portfolio(args, cfg):
         sys.exit(f"error: no daily data for the benchmark {bench}. Fetch it: gtrade.py fetch {bench} "
                  f"--interval 1440 --days {args.days}")
     events = []
-    if not args.no_adjust:
+    if not args.no_adjust and args.source != "nse":  # NSE data is already adjusted with NSE's own factors
         from groww_trader import adjust
         data, events = adjust.adjust_all(data)
     m = pf.build_market(data, bench, ew_universe=[s for s in uni if s in data])
@@ -735,8 +770,12 @@ def cmd_portfolio(args, cfg):
     try:
         if args.sweep:
             res = pf.sweep(m, base, pf.grid(args.strategy), cfg, train_frac=args.train, capital=capital)
+            if args.walk_forward:
+                res["walk_forward"] = pf.walk_forward(m, base, pf.grid(args.strategy), cfg,
+                                                      train_days=args.wf_train, test_days=args.wf_test,
+                                                      capital=capital)
         else:
-            res = pf.evaluate(m, base, cfg, train_frac=args.train, capital=capital)
+            res = pf.evaluate(m, base, cfg, train_frac=args.train, capital=capital, baseline_runs=args.baseline)
     except ValueError as e:
         sys.exit(f"error: {e}")
     res.update(universe=udesc, data_errors=errors, adjustments=events, survivorship_note=(
@@ -776,14 +815,18 @@ def cmd_portfolio(args, cfg):
         bn = {r["train"].get("benchmark_name") for r in res["top"]} | {r["test"].get("benchmark_name") for r in res["top"]}
         print(f"\n(total returns over each period, after costs; bench = {', '.join(sorted(x for x in bn if x))})")
     else:
-        head = f"{'period':7} {'dates':25} {'return':>8} {'CAGR':>7} {'bench':>8} {'maxDD':>7} {'Sharpe':>6} {'trades':>6} {'costs ₹':>9}"
+        head = (f"{'period':7} {'dates':25} {'return':>8} {'CAGR':>7} {'bench':>8} {'maxDD':>7} {'Sharpe':>6} "
+                f"{'trades':>6} {'costs ₹':>9} {'after tax':>9} {'bench a/t':>9}")
         print(head + "\n" + "-" * len(head))
         for name in ("train", "test", "full"):
             r = res[name]
             s, b = r["strategy"], r.get("benchmark", {})
             print(f"{name:7} {s['start'] + ' to ' + s['end']:25} {pct(s['total_return_pct']):>8} {pct(s['cagr_pct']):>7} "
                   f"{pct(b.get('total_return_pct')):>8} {pct(s['max_drawdown_pct']):>7} "
-                  f"{(s['sharpe'] if s['sharpe'] is not None else '—'):>6} {s['trades']:>6} {s['costs']:>9.0f}")
+                  f"{(s['sharpe'] if s['sharpe'] is not None else '—'):>6} {s['trades']:>6} {s['costs']:>9.0f} "
+                  f"{pct(s.get('after_tax_return_pct')):>9} {pct(b.get('after_tax_return_pct')):>9}")
+        print("after tax: capital gains tax on realised gains (STCG 20%, LTCG 12.5% above Rs 1.25L a year, "
+              "4% cess), estimated; bench a/t only for the ETF")
         held = res["full"]["last_holdings"]
         print(f"\nHolding at the end: {', '.join(f'{k} x{v}' for k, v in held.items()) or 'cash'}")
         for name in ("train", "test"):
@@ -796,8 +839,31 @@ def cmd_portfolio(args, cfg):
             if parts:
                 print(f"{name}: strategy {pct(r['strategy']['total_return_pct'])} vs " + ", ".join(parts)
                       + (f"  -> judged against {r['benchmark_name']}: {pct(r['excess_total_pct'])}" if "excess_total_pct" in r else ""))
+    if not args.sweep and "vs_random_picks" in res.get("train", {}):
+        print("\nAgainst random stock picks (same days, number of holdings, weights and costs):")
+        for name in ("train", "test"):
+            vr = res[name]["vs_random_picks"]
+            rp = vr["random_total_pct"]
+            print(f"  {name}: strategy {pct(vr['strategy_total_pct'])} vs random median {pct(rp['median'])} "
+                  f"(middle 90%: {pct(rp['p05'])} to {pct(rp['p95'])}); "
+                  f"{vr['share_of_random_runs_as_good_pct']}% of {vr['runs']} random runs did as well or better"
+                  f" -> {'BEATS random' if vr['beats_random'] else 'no better than random'}")
     if res.get("verdict"):
         print(f"\nVerdict: {res['verdict']}")
+    wf = res.get("walk_forward")
+    if wf:
+        print(f"\nWalk-forward: choose on {wf['train_days']} trading days, hold the pick for the next "
+              f"{wf['test_days']}, roll forward ({wf['windows']} windows)")
+        for f in wf["folds"]:
+            v = f["pick"]
+            name = " ".join(f"{k}={v[k]}" for k in ("lookback", "top", "regime", "weight") if k in v)
+            print(f"  {f['test'][0]} to {f['test'][1]}: {name:40} {pct(f['test_return_pct']):>8} "
+                  f"vs {f.get('benchmark_name') or 'bench'} {pct(f['test_benchmark_pct']):>8}")
+        print(f"Chained: strategy {pct(wf['chained_test_return_pct'])} vs benchmark {pct(wf['chained_benchmark_pct'])}. "
+              f"{wf['verdict']}")
+    if args.sweep and "luck_check" not in res and res.get("variants_tested"):
+        print(f"Luck check: {res['variants_tested']} variations were tried; the best train result always "
+              "looks better than the strategy really is. Judge by the test columns and the walk-forward.")
     if res.get("survivorship_note"):
         print(f"Note: {res['survivorship_note']}")
     if args.cash_yield == 0:
@@ -856,6 +922,43 @@ def cmd_mongo(args, cfg):
     out({"ok": ok, "journal_entries": len(journal), **({} if ok else {"reason": store.error})})
 
 
+def cmd_nse(args, cfg):
+    """Free official daily data from NSE bhavcopies: fetch days, build candles."""
+    from groww_trader import nse, universe
+    from groww_trader.config import home
+    days_dir = home() / "nse_days"
+    if args.action == "fetch":
+        end = date.fromisoformat(args.to) if args.to else now_ist().date()
+        start = date.fromisoformat(args.start) if args.start else end - timedelta(days=365 * args.years)
+        print(f"Fetching NSE bhavcopies {start} to {end} into {days_dir} (cached days are skipped; "
+              f"about {args.pause}s between files, so a year takes ~4 minutes the first time).", flush=True)
+        res = nse.fetch(days_dir, start, end, pause=args.pause)
+        out({k: (v[:10] if k == "failed" else v) for k, v in res.items()} | {"failed_count": len(res["failed"])})
+        return
+    syms = [s.upper() for s in args.symbols]
+    if args.universe:
+        syms += universe.load(args.universe)[0]
+    if not syms:
+        syms = [s.upper() for s in cfg["watchlist"]]
+    if args.benchmark:
+        syms += [b.strip().upper() for b in args.benchmark.split(",") if b.strip()]
+    syms = list(dict.fromkeys(syms))
+    if not any(days_dir.glob("*.csv.gz")):
+        sys.exit("error: no NSE days cached yet. Run: gtrade.py nse fetch --years 7")
+    candles, actions = nse.build(days_dir, syms)
+    folder = home() / "data_nse"
+    for s, cs in candles.items():
+        save_csv(cs, csv_path(s, 1440, folder))
+    write_json("nse_actions.json", actions)
+    missing = [s for s in syms if s not in candles]
+    out({"symbols_built": len(candles), "folder": str(folder),
+         "first_day": min((cs[0].ts.date() for cs in candles.values()), default=None).__str__(),
+         "last_day": max((cs[-1].ts.date() for cs in candles.values()), default=None).__str__(),
+         "corporate_actions_applied": len(actions), "actions_file": "trader/nse_actions.json",
+         "missing": missing,
+         "next": "use --source nse with swing or portfolio, e.g. gtrade.py portfolio --universe nifty100 --source nse"})
+
+
 def cmd_costs(args, cfg):
     """Charges for one round trip and the move needed to break even."""
     from groww_trader.costs import break_even
@@ -902,7 +1005,7 @@ def main(argv=None):
         p.set_defaults(fn=fn)
         if symbols:
             p.add_argument("symbols", nargs="*")
-        p.add_argument("--source", default="auto", choices=["auto", "csv", "groww"])
+        p.add_argument("--source", default="auto", choices=["auto", "csv", "groww", "nse"])
         return p
 
     add("check", cmd_check)
@@ -916,8 +1019,20 @@ def main(argv=None):
     p.add_argument("--shorts", action="store_true")
     p.add_argument("--baseline", type=int, default=300, metavar="RUNS",
                    help="random-entry runs (default 300; 0 skips the check)")
+    p.add_argument("--baseline-window", type=int, metavar="MIN",
+                   help="time-matched: random entries only within MIN minutes of each real entry")
     p.add_argument("--json", action="store_true")
     p.add_argument("--write", action="store_true", help="save to trader/evaluate.json (and MongoDB if set up)")
+    p = sub.add_parser("nse", help="free official NSE daily data (bhavcopy): fetch days, build candles")
+    p.set_defaults(fn=cmd_nse)
+    p.add_argument("action", choices=["fetch", "build"])
+    p.add_argument("symbols", nargs="*")
+    p.add_argument("--years", type=int, default=7, help="fetch: how many years back (default 7)")
+    p.add_argument("--from", dest="start", help="fetch: start date YYYY-MM-DD (instead of --years)")
+    p.add_argument("--to", help="fetch: end date (default today)")
+    p.add_argument("--pause", type=float, default=0.6, help="fetch: seconds between files (be polite)")
+    p.add_argument("--universe", help="build: nifty50|nifty100|nifty200|nifty500, a file, or A,B,C")
+    p.add_argument("--benchmark", default="NIFTYBEES,GOLDBEES", help="build: ETFs to include too")
     p = sub.add_parser("costs", help="what a trade really costs, and the move needed to break even")
     p.set_defaults(fn=cmd_costs)
     p.add_argument("value", nargs="?", type=float, help="trade value in rupees (default: a table of sizes)")
@@ -966,12 +1081,14 @@ def main(argv=None):
     p.add_argument("--shorts", action="store_true", help="also take short trades (intraday MIS only)")
     p.add_argument("--baseline", type=int, default=0, metavar="RUNS",
                    help="compare with RUNS sets of random-timed entries (try 500)")
+    p.add_argument("--baseline-window", type=int, metavar="MIN",
+                   help="time-matched baseline: random entries only within MIN minutes of each real entry")
     p.add_argument("--write", action="store_true")
     p = sub.add_parser("paper", help="simulated trading on live data; never sends orders")
     p.set_defaults(fn=cmd_paper)
     p.add_argument("action", choices=["run", "once", "replay", "report"])
     p.add_argument("symbols", nargs="*")
-    p.add_argument("--source", default="auto", choices=["auto", "csv", "groww"])
+    p.add_argument("--source", default="auto", choices=["auto", "csv", "groww", "nse"])
     p.add_argument("--interval", type=int)
     p.add_argument("--date", help="replay: session to replay; report: only this day")
     p.add_argument("--now", help="once: YYYY-MM-DDTHH:MM, step as of this IST time")
@@ -993,12 +1110,18 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p.add_argument("--all", action="store_true", help="with --json, include every variation")
     p.add_argument("--write", action="store_true", help="save to trader/sweep.json")
+    p.add_argument("--walk-forward", action="store_true",
+                   help="also re-run the search on rolling windows and join the unseen results")
+    p.add_argument("--wf-train", type=int, default=120, help="walk-forward: sessions to choose on (default 120)")
+    p.add_argument("--wf-test", type=int, default=40, help="walk-forward: sessions to trade the pick (default 40)")
     p = add("swing", cmd_swing, symbols=True)
     p.add_argument("--lookbacks", default="20,55", help="N-day high to break (comma list)")
     p.add_argument("--stops", default="pct:3,pct:5,atr:2")
     p.add_argument("--targets", default="2R,3R,none")
     p.add_argument("--holds", default="10,20", help="max days in a trade")
     p.add_argument("--trends", default="0,50", help="only buy above this SMA; 0 = no filter")
+    p.add_argument("--baseline", type=int, default=200, metavar="RUNS",
+                   help="compare the pick with RUNS sets of random entry days (default 200; 0 skips)")
     p.add_argument("--days", type=int, default=1100, help="calendar days of daily candles to use")
     p.add_argument("--train", type=float, default=0.6)
     p.add_argument("--min-trades", type=int, default=8)
@@ -1032,7 +1155,13 @@ def main(argv=None):
     p.add_argument("--train", type=float, default=0.6)
     p.add_argument("--sweep", action="store_true", help="try a small grid of variations, judged on unseen data")
     p.add_argument("--no-adjust", action="store_true", help="don't adjust for splits, bonuses and demergers")
-    p.add_argument("--source", default="auto", choices=["auto", "csv", "groww"])
+    p.add_argument("--baseline", type=int, default=100, metavar="RUNS",
+                   help="compare stock selection with RUNS random picks (default 100; 0 skips; not with --sweep)")
+    p.add_argument("--walk-forward", action="store_true",
+                   help="with --sweep: choose on rolling windows, hold the pick for the next one, chain the results")
+    p.add_argument("--wf-train", type=int, default=504, help="walk-forward: trading days to choose on (default 504, ~2 years)")
+    p.add_argument("--wf-test", type=int, default=252, help="walk-forward: trading days to hold the pick (default 252, ~1 year)")
+    p.add_argument("--source", default="auto", choices=["auto", "csv", "groww", "nse"])
     p.add_argument("--json", action="store_true")
     p.add_argument("--all", action="store_true")
     p.add_argument("--write", action="store_true", help="save to trader/portfolio.json")

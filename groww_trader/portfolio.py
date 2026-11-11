@@ -32,6 +32,7 @@ from __future__ import annotations
 import copy
 import itertools
 import math
+import random
 import statistics
 from dataclasses import dataclass, field
 from datetime import date
@@ -215,6 +216,19 @@ def simulate(m: Market, decide: Callable[[int], Dict[str, float]], days: Sequenc
     band = float(cfg.get("_band", 0.2))
     daily_cash = (1 + float(cfg.get("_cash_yield_pct", 0)) / 100) ** (1 / TRADING_DAYS) - 1
     cash, shares = float(capital), {}
+    lots: Dict[str, List[List[Any]]] = {}      # FIFO: [qty, cost per share incl. buy charges, buy date]
+    realised: List[Any] = []                   # (sell date, gain after charges, days held)
+
+    def _realise(s_, q_, net_ps, d_):
+        while q_ > 0 and lots.get(s_):
+            lot = lots[s_][0]
+            k = min(q_, lot[0])
+            realised.append((d_, k * (net_ps - lot[1]), (d_ - lot[2]).days))
+            lot[0] -= k
+            q_ -= k
+            if lot[0] == 0:
+                lots[s_].pop(0)
+
     pending: Optional[Dict[str, float]] = None
     decide_on = set(days)
     equity, invested, trades = [], [], []
@@ -241,6 +255,7 @@ def simulate(m: Market, decide: Callable[[int], Dict[str, float]], days: Sequenc
                     c_ = _leg_cost("SELL", p_, q, charges)
                     cash += q * p_ - c_
                     costs += c_
+                    _realise(s, q, (q * p_ - c_) / q, m.dates[i])
                     traded += q * p_
                     trades.append({"date": str(m.dates[i]), "symbol": s, "side": "SELL", "qty": q, "price": p_, "cost": c_})
                     shares[s] = cur - q
@@ -258,6 +273,7 @@ def simulate(m: Market, decide: Callable[[int], Dict[str, float]], days: Sequenc
                 c_ = _leg_cost("BUY", p_, q, charges)
                 cash -= q * p_ + c_
                 costs += c_
+                lots.setdefault(s, []).append([q, (q * p_ + c_) / q, m.dates[i]])
                 traded += q * p_
                 trades.append({"date": str(m.dates[i]), "symbol": s, "side": "BUY", "qty": q, "price": p_, "cost": c_})
                 shares[s] = shares.get(s, 0) + q
@@ -270,11 +286,29 @@ def simulate(m: Market, decide: Callable[[int], Dict[str, float]], days: Sequenc
         if i in decide_on and i < end:
             pending = decide(i)
 
-    exit_cost = sum(_leg_cost("SELL", m.cf[s][end] or 0, q, charges) for s, q in shares.items())
+    exit_cost = 0.0
+    for s, q in shares.items():  # value at the end = selling everything
+        px_ = m.cf[s][end] or 0
+        c_ = _leg_cost("SELL", px_, q, charges)
+        exit_cost += c_
+        if q:
+            _realise(s, q, (q * px_ - c_) / q, m.dates[end])
     final = equity[-1] - exit_cost
     return {"equity": equity, "invested": invested, "final": final, "trades": trades,
-            "costs": costs + exit_cost, "traded": traded, "holdings": dict(shares),
+            "costs": costs + exit_cost, "traded": traded, "holdings": dict(shares), "realised": realised,
             "start": str(m.dates[start]), "end": str(m.dates[end])}
+
+
+def _after_tax(sim: Dict[str, Any], capital: float, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Capital gains tax on everything realised, including the final sale.
+    Paid at the end in this model (in reality, each year), which slightly
+    flatters high-turnover strategies."""
+    from .tax import capital_gains_tax
+    t = capital_gains_tax(sim.get("realised", []), cfg)
+    after = sim["final"] - t["total_tax"]
+    st = sum(g for _, g, h in sim.get("realised", []) if h <= 365)
+    return {"tax": t["total_tax"], "short_term_gains": round(st, 2),
+            "after_tax_return_pct": round(100 * (after / capital - 1), 2)}
 
 
 def metrics(m: Market, sim: Dict[str, Any], start: int, end: int, capital: float, rf_pct: float) -> Dict[str, Any]:
@@ -313,11 +347,12 @@ def run_period(m: Market, p: Dict[str, Any], cfg: Dict[str, Any], start: int, en
     strat = STRATEGIES[p["strategy"]]
     sim = simulate(m, lambda i: strat(m, i, p), rebalance_days(m, start, end, p.get("rebalance", "monthly")),
                    start, end, c, capital)
-    out = {"strategy": metrics(m, sim, start, end, capital, rf), "last_holdings": sim["holdings"]}
+    out = {"strategy": {**metrics(m, sim, start, end, capital, rf), **_after_tax(sim, capital, c)},
+           "last_holdings": sim["holdings"]}
     b = p.get("benchmark")
     if covers(m, b, start):  # the ETF, bought once with real costs
         bs = simulate(m, lambda i: {b: 1.0}, [start], start, end, c, capital)
-        out["etf"] = metrics(m, bs, start, end, capital, rf)
+        out["etf"] = {**metrics(m, bs, start, end, capital, rf), **_after_tax(bs, capital, c)}
     if EQW in m.c:  # the universe itself, equal weight, no costs (a generous yardstick)
         free = copy.deepcopy(c)
         free["slippage_pct"] = 0.0
@@ -335,10 +370,61 @@ def run_period(m: Market, p: Dict[str, Any], cfg: Dict[str, Any], start: int, en
         out["benchmark_name"] = b if primary == "etf" else "universe equal-weight"
         sc, bc = out["strategy"]["total_return_pct"], out["benchmark"]["total_return_pct"]
         out["excess_total_pct"] = round(sc - bc, 2)
+        if "after_tax_return_pct" in out["benchmark"]:
+            out["excess_after_tax_pct"] = round(out["strategy"]["after_tax_return_pct"]
+                                                - out["benchmark"]["after_tax_return_pct"], 2)
         if out["strategy"]["cagr_pct"] is not None and out["benchmark"]["cagr_pct"] is not None:
             out["excess_cagr_pct"] = round(out["strategy"]["cagr_pct"] - out["benchmark"]["cagr_pct"], 2)
     out["trades_detail"] = sim["trades"]
     return out
+
+
+def random_picks(m: Market, p: Dict[str, Any], cfg: Dict[str, Any], start: int, end: int,
+                 capital: float, real_total_pct: float, runs: int = 100, seed: int = 13) -> Dict[str, Any]:
+    """Does the strategy's choice of stocks beat choosing at random?
+
+    Each run follows the strategy's own schedule and exposure: on every
+    rebalance day it holds as many positions as the strategy did (none when
+    the strategy or its regime filter was in cash), but picks them at random
+    from the eligible pool (stocks with enough history that day), weighted
+    the same way, with the same costs and slippage. So only the selection
+    differs. Random runs also replace as many names as the strategy does on
+    each rebalance, so turnover and costs match too."""
+    c = copy.deepcopy(cfg)
+    c["_band"] = p.get("band", 0.2)
+    c["_cash_yield_pct"] = p.get("cash_yield_pct", 0)
+    strat = STRATEGIES[p["strategy"]]
+    pool_key = "assets" if p["strategy"] == "dualmom" else "universe"
+    lb = int(p.get("lookback", 252))
+    days = rebalance_days(m, start, end, p.get("rebalance", "monthly"))
+    eligible = lambda s_, i: s_ in m.c and _tradable(m, s_, i) and ret(m, s_, i, lb) is not None
+    totals = []
+    for r in range(runs):
+        rng = random.Random(seed * 1000 + r)
+        state = {"real": set(), "held": []}
+
+        def decide(i, rng=rng, state=state):
+            real = set(strat(m, i, p))
+            entered = len(real - state["real"])          # names the strategy swapped in
+            state["real"] = real
+            k = len(real)
+            held = [x for x in state["held"] if eligible(x, i)]
+            keep = rng.sample(held, max(0, min(len(held), k - entered)))
+            pool = [x for x in p[pool_key] if eligible(x, i) and x not in keep]
+            held = keep + rng.sample(pool, min(k - len(keep), len(pool)))
+            state["held"] = held
+            return _weights(m, held, i, p.get("weight", "equal")) if held else {}
+
+        sim = simulate(m, decide, days, start, end, c, capital)
+        totals.append(100 * (sim["final"] / capital - 1))
+    totals.sort()
+    pct = lambda q: round(totals[min(runs - 1, int(q * runs))], 2)
+    share = sum(1 for t in totals if t >= real_total_pct) / runs
+    return {"runs": runs, "seed": seed, "strategy_total_pct": real_total_pct,
+            "random_total_pct": {"p05": pct(0.05), "median": pct(0.5), "p95": pct(0.95)},
+            "share_of_random_runs_as_good_pct": round(100 * share, 1),
+            "beats_random": share <= 0.05,
+            "method": "same rebalance days, number of holdings, names replaced per rebalance, weighting, costs and slippage; stocks picked at random"}
 
 
 def split(m: Market, p: Dict[str, Any], train_frac: float):
@@ -361,13 +447,44 @@ def regime_symbol(m: Market, p: Dict[str, Any]) -> Optional[str]:
 
 
 def evaluate(m: Market, p: Dict[str, Any], cfg: Dict[str, Any], train_frac: float = 0.6,
-             capital: float = 100000) -> Dict[str, Any]:
+             capital: float = 100000, baseline_runs: int = 0) -> Dict[str, Any]:
     p = {**p, "regime_symbol": regime_symbol(m, p)}
     w, cut, last = split(m, p, train_frac)
-    return {"params": {k: v for k, v in p.items() if k not in ("universe",)},
-            "train": run_period(m, p, cfg, w, cut - 1, capital),
-            "test": run_period(m, p, cfg, cut, last, capital),
-            "full": run_period(m, p, cfg, w, last, capital)}
+    res = {"params": {k: v for k, v in p.items() if k not in ("universe",)},
+           "train": run_period(m, p, cfg, w, cut - 1, capital),
+           "test": run_period(m, p, cfg, cut, last, capital),
+           "full": run_period(m, p, cfg, w, last, capital)}
+    if baseline_runs:
+        for name, (a, b) in (("train", (w, cut - 1)), ("test", (cut, last))):
+            res[name]["vs_random_picks"] = random_picks(
+                m, p, cfg, a, b, capital, res[name]["strategy"]["total_return_pct"], runs=baseline_runs)
+    res["verdict"] = single_verdict(res)
+    return res
+
+
+def single_verdict(res: Dict[str, Any]) -> str:
+    """Plain verdict for one strategy, judged mainly on the later (test) period."""
+    te, tr = res["test"], res["train"]
+    vr = te.get("vs_random_picks")
+    if "excess_total_pct" not in te:
+        base = "No benchmark covers the test period, so it can't be judged against the index."
+    elif te["excess_total_pct"] <= 0:
+        base = (f"Did not beat simply holding {te.get('benchmark_name')} on the later, unseen period "
+                f"({te['excess_total_pct']:+.1f} points)" + (", although it did on the earlier one." if tr.get("excess_total_pct", 0) > 0 else "."))
+    else:
+        base = f"Beat {te.get('benchmark_name')} on the later period by {te['excess_total_pct']:+.1f} points."
+    if not vr:
+        return base + " Not compared with random picks (use --baseline)."
+    if vr["beats_random"]:
+        rnd = " Its stock selection beat random picks there too ({}% of random runs did as well).".format(
+            vr["share_of_random_runs_as_good_pct"])
+    else:
+        rnd = (" But random picks with the same schedule did as well in {}% of runs: the selection rule "
+               "itself added nothing measurable.").format(vr["share_of_random_runs_as_good_pct"])
+    tail = ""
+    if "excess_total_pct" in te and te["excess_total_pct"] > 0 and vr["beats_random"]:
+        tail = " Worth paper-tracking for months; survivorship bias and a short test period still flatter it."
+    return base + rnd + tail
 
 
 # ------------------------------------------------------------------ sweep
@@ -425,3 +542,53 @@ def verdict(best, held: int, shown: int) -> str:
     return (f"The pick beat the benchmark on both periods ({held} of the top {shown} held up on test). "
             "Worth tracking on paper for a few months. Not proof: survivorship bias flatters these "
             "results, the test period is short, and the edge may not last.")
+
+
+def walk_forward(m: Market, base: Dict[str, Any], variants: List[Dict[str, Any]], cfg: Dict[str, Any],
+                 train_days: int = 504, test_days: int = 252, capital: float = 100000) -> Dict[str, Any]:
+    """Choose the best variation on `train_days`, hold it for the next
+    `test_days`, roll forward, and chain the unseen periods together. That is
+    what following the search would actually have earned."""
+    base = {**base, "regime_symbol": regime_symbol(m, base)}
+    w = max(warmup({**base, **v}) for v in variants)
+    last = len(m.dates) - 1
+    if last - w < train_days + test_days:
+        raise ValueError(f"only {last - w + 1} days after the {w}-day warm-up; walk-forward needs "
+                         f"{train_days + test_days} (fetch more history or use smaller windows)")
+    folds = []
+    start = w
+    key = lambda r: r.get("excess_total_pct", r["strategy"]["total_return_pct"])
+    while start + train_days + test_days - 1 <= last:
+        a, b = start, start + train_days - 1
+        c_, d_ = b + 1, min(last, b + test_days)
+        scored = []
+        for v in variants:
+            r = run_period(m, {**base, **v}, cfg, a, b, capital)
+            scored.append((key(r), v))
+        best_score, v = max(scored, key=lambda x: x[0])
+        te = run_period(m, {**base, **v}, cfg, c_, d_, capital)
+        folds.append({"train": [str(m.dates[a]), str(m.dates[b])], "test": [str(m.dates[c_]), str(m.dates[d_])],
+                      "pick": v, "train_excess_pct": round(best_score, 2),
+                      "test_return_pct": te["strategy"]["total_return_pct"],
+                      "test_benchmark_pct": te.get("benchmark", {}).get("total_return_pct"),
+                      "benchmark_name": te.get("benchmark_name")})
+        start += test_days
+    grow = lambda xs: round(100 * (math.prod(1 + x / 100 for x in xs) - 1), 2)
+    strat = grow([f["test_return_pct"] for f in folds])
+    have_b = all(f["test_benchmark_pct"] is not None for f in folds)
+    bench = grow([f["test_benchmark_pct"] for f in folds]) if have_b else None
+    beat = sum(1 for f in folds if f["test_benchmark_pct"] is not None and f["test_return_pct"] > f["test_benchmark_pct"])
+    if not folds:
+        v_ = "Not enough history for a single window."
+    elif bench is None:
+        v_ = "No benchmark covers every window, so it can't be judged against the index."
+    elif strat > bench:
+        v_ = (f"Following the search beat the benchmark out of sample ({strat:+.1f}% vs {bench:+.1f}%, "
+              f"{beat} of {len(folds)} windows). Worth paper-tracking; survivorship bias still flatters it.")
+    else:
+        v_ = (f"Following the search did NOT beat the benchmark out of sample ({strat:+.1f}% vs {bench:+.1f}%, "
+              f"{beat} of {len(folds)} windows ahead). Holding the index would have done as well or better.")
+    return {"windows": len(folds), "train_days": train_days, "test_days": test_days,
+            "variants_tried": len(variants), "folds": folds,
+            "chained_test_return_pct": strat, "chained_benchmark_pct": bench,
+            "windows_beating_benchmark": beat, "verdict": v_}

@@ -7,7 +7,7 @@ description: Set up the Groww trader skills for a user - install the Groww SDK, 
 
 Gets one person running these tools against **their own** Groww account. Nothing is hosted; nothing leaves their machine except calls to Groww.
 
-Not everything needs Groww: `groww-costs` works with no login, and `groww-check-idea` can run on cached data (`--source csv`). Live data, `fetch` and paper trading need the API.
+Not everything needs Groww: `groww-costs` works with no login; daily strategies (swing, portfolio) can use years of free official NSE data (`gtrade.py nse fetch --years 7`, then `nse build`, then `--source nse`); and cached data works offline (`--source csv`). Intraday 5-minute data, `fetch` and paper trading need the Groww API.
 
 ## Where things are
 

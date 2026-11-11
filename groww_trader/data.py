@@ -344,6 +344,9 @@ def has_groww_credentials() -> bool:
 
 
 def get_source(kind: str = "auto", exchange: str = "NSE"):
+    if kind == "nse":  # daily candles built from NSE bhavcopies (gtrade.py nse fetch / build)
+        from .config import home
+        return CSVSource(home() / "data_nse")
     if kind == "csv" or (kind == "auto" and not has_groww_credentials()):
         return CSVSource()
     return GrowwSource(exchange=exchange)

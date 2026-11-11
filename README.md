@@ -3,13 +3,15 @@
 Open-source Claude skills that answer one question honestly: **does my trading idea actually work on Indian stocks, after real charges, or does it just look like it does?** Describe a strategy in plain words; Claude tests it on NSE data with your own Groww account and gives you a pass/fail scorecard.
 
 - **Never places orders. Enforced in code.** The Groww client is wrapped so only market-data calls work (order calls raise an error), and a test fails the build if order code ever appears. Paper trading only.
-- **Tests against chance, not just against zero.** Every idea is compared with random entry timing on the same stocks and days. A rule that doesn't beat random has no edge, however its profit looks.
+- **Tests against chance, not just against zero.** Intraday and swing rules are compared with random entries on the same stocks; portfolio strategies with random stock picks on the same schedule and turnover. Every sweep carries a luck check and can be re-run walk-forward. A rule that doesn't beat random has no edge, however its profit looks.
+- **After tax, too.** Multi-day results show capital gains tax (STCG 20%, LTCG 12.5% above Rs 1.25 lakh, 4% cess), so monthly rotation is compared fairly with buy-and-hold.
+- **Years of free data.** Daily strategies can use NSE's official bhavcopy files (`gtrade.py nse fetch`) with NSE's own split and bonus adjustments: no Groww account needed for those tests.
 - **Honest about costs.** Brokerage, STT, exchange and SEBI fees, stamp duty, GST and the DP charge are in every test, with conservative fills.
 - **Runs on your machine, with your keys.** Nothing is hosted. Standard-library Python; Groww's SDK only for live data.
 
 Inspired by the design of [day-trader-skill](https://github.com/jakeschincariol/day-trader-skill) (MIT), rebuilt for Indian markets and Groww.
 
-> **What we found so far:** on a full year of 5-minute data for 10 NSE large-caps, the opening-range breakout and its "fade" both lost money after charges, and neither beat random entry timing: the average trade made about Rs 0 before charges and paid about Rs 25 in them. Swing breakouts and monthly momentum didn't survive the unseen period either. Full tables and method: [docs/results.md](docs/results.md).
+> **What we found so far:** on a full year of 5-minute data for 10 NSE large-caps, the opening-range breakout and its "fade" both lost money after charges: the average trade made about Rs 0 before charges and paid about Rs 25 in them. Swing breakouts and monthly momentum didn't survive the unseen period either. Full tables and method: [docs/results.md](docs/results.md).
 
 > **Not financial advice.** This is software that reads market data and does arithmetic. It doesn't know your situation and can't see the future. SEBI found 7 in 10 individual intraday traders in the cash market lost money in FY23. Test first and decide for yourself.
 
@@ -33,7 +35,7 @@ Setup: range_min 15, min_range_pct 1.0, max_range_pct 3.0
 Account: Rs 20,000, max Rs 200 loss a trade, Rs 400 a day, 1 open, 2 trades a day
 
   [PASS] Enough trades to judge: 182 trades over 249 sessions
-  [FAIL] Entries beat random timing: 97.7% of 300 random-timed versions did as well or better (real Rs -4,848 vs random median Rs -3,528)
+  [FAIL] Entries beat random timing: (re-run pending with the corrected baseline, v0.8)
   [FAIL] Profitable after charges: net Rs -4,848 (-24.24% of capital); before charges Rs -312, charges Rs 4,536
   [FAIL] Holds up in both halves of the period: before 2026-06-19: Rs -3,084 on 112 trades; from 2026-06-19: Rs -1,764 on 70 trades
   [FAIL] Worst drawdown tolerable: worst fall from a peak Rs 5,020 = 25.1% of capital (limit 15.0%)
@@ -96,7 +98,9 @@ python3 gtrade.py evaluate --setup orb --source csv             # the scorecard:
 python3 gtrade.py backtest SBIN --setup orb --source csv        # one stock in detail
 python3 gtrade.py backtest --days 365 --source csv              # whole watchlist as one account, with your limits
 python3 gtrade.py backtest --days 365 --source csv --baseline 500   # does the signal beat random entry timing?
-python3 gtrade.py sweep --source csv                            # many rules, judged on unseen data
+python3 gtrade.py sweep --source csv --walk-forward             # many rules, luck check, rolling unseen windows
+python3 gtrade.py nse fetch --years 7 && python3 gtrade.py nse build --universe nifty100   # free NSE daily data
+python3 gtrade.py portfolio --universe nifty100 --source nse    # momentum vs index, random picks, after tax
 python3 gtrade.py scan --write && python3 gtrade.py plan --write
 python3 gtrade.py size --write && python3 gtrade.py risk --write
 python3 gtrade.py show                                          # tickets in plain words
@@ -207,7 +211,7 @@ Conservative on purpose: entry at the next bar's open plus slippage; targets nee
 ## Tests
 
 ```
-python3 -m unittest discover -s tests -v
+python3 -m pytest tests     # pip install pytest (or: python3 -m unittest discover -s tests, class-based tests only)
 ```
 
 Offline, on synthetic candles (not real market data). They include the no-orders guard (a static scan for order code, and the read-only client blocking order calls), the scorecard verdicts, the random-entry baseline (no edge found on random walks, a planted edge detected), the charge math (intraday and delivery), every setup's triggers, per-setup exits, sizing, the risk gate, the fill model, the sweep's train/test separation, swing entries and exits, paper trading (no peeking at unfinished bars, restart-safe, identical to the backtest, pause behaviour), the single-instance lock, restart and stuck detection, long fetches with missing old windows, Telegram command handling and the MongoDB mirror's failure path.
@@ -222,13 +226,13 @@ Offline, on synthetic candles (not real market data). They include the no-orders
 
 ## Roadmap
 
-No order placement is planned. The aim is to make the answers more trustworthy and easier to get:
+No order placement is planned. Next:
 
-- Random-entry baseline for swing and portfolio tests (does momentum beat picking stocks at random?)
-- Time-matched random baseline; walk-forward testing; a warning sized to how many variations were tried
-- Free official NSE daily data (bhavcopy) with corporate actions, so testing works without a Groww account
-- Taxes in multi-day tests; a weekly paper-vs-backtest report
 - Configuration by conversation instead of editing JSON
+- A weekly paper-vs-backtest report
+- Swing and portfolio paper tracking (the paper engine is intraday only today)
+
+Done in 0.8: random baselines for intraday (other-day, optional time-matched), swing and portfolio; luck check and walk-forward for sweeps; capital gains tax in multi-day tests; free NSE bhavcopy data.
 
 Contributions welcome. Keep the rules: no order code, paper only, keys out of code.
 

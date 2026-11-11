@@ -64,3 +64,33 @@ class Swing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SwingRandomBaseline(unittest.TestCase):
+    def test_baseline_runs_and_reports(self):
+        import random as _r
+        from groww_trader import swing as sw
+        from groww_trader.config import load_config
+        cfg = load_config("/nonexistent")
+        rng = _r.Random(3)
+        data = {}
+        for k in range(4):
+            p, cs, d = 100.0, [], date(2023, 1, 2)
+            for n in range(600):
+                while d.weekday() >= 5:
+                    d += timedelta(days=1)
+                o = p
+                c = o * (1 + rng.gauss(0.0003, 0.015))
+                cs.append(Candle(datetime(d.year, d.month, d.day, tzinfo=IST), o, max(o, c) * 1.004, min(o, c) * 0.996, c, 1e5))
+                p = c
+                d += timedelta(days=1)
+            data[f"R{k}"] = cs
+        rule = {"lookback": 20, "stop": "pct:5", "target": "2R", "hold": 10, "trend": 0}
+        trades = []
+        for s, cs in data.items():
+            trades += sw.run(s, cs, rule, cfg)["trades"]
+        self.assertGreaterEqual(len(trades), 10)
+        res = sw.random_baseline(trades, data, rule, cfg, runs=60)
+        self.assertEqual(res["trades_compared"], len(trades))
+        self.assertLessEqual(res["random_net"]["p05"], res["random_net"]["p95"])
+        self.assertFalse(res["beats_random"])  # random walk: breakouts can't beat random days
