@@ -27,11 +27,16 @@ Inspired by the design of [day-trader-skill](https://github.com/jakeschincariol/
 
 ```
 $ python3 gtrade.py evaluate --setup orb --source csv
-  [PASS] Enough trades to judge: 182 trades over 250 sessions
-  [FAIL] Entries beat random timing: 98.2% of 500 random-timed versions did as well or better
-  [FAIL] Profitable after charges: net Rs -4,848 (-24.2% of capital); before charges Rs -312, charges Rs 4,536
-  [FAIL] Holds up in both halves of the period: ...
-  [PASS] Worst drawdown tolerable: ...
+Idea: orb on 10 stocks, 5-min bars, 2025-11-11 to 2026-11-11 (249 sessions)
+Exits: stop or_mid, target 1.5R, out by 15:10
+Setup: range_min 15, min_range_pct 1.0, max_range_pct 3.0
+Account: Rs 20,000, max Rs 200 loss a trade, Rs 400 a day, 1 open, 2 trades a day
+
+  [PASS] Enough trades to judge: 182 trades over 249 sessions
+  [FAIL] Entries beat random timing: 97.7% of 300 random-timed versions did as well or better (real Rs -4,848 vs random median Rs -3,528)
+  [FAIL] Profitable after charges: net Rs -4,848 (-24.24% of capital); before charges Rs -312, charges Rs 4,536
+  [FAIL] Holds up in both halves of the period: before 2026-06-19: Rs -3,084 on 112 trades; from 2026-06-19: Rs -1,764 on 70 trades
+  [FAIL] Worst drawdown tolerable: worst fall from a peak Rs 5,020 = 25.1% of capital (limit 15.0%)
   [cost] Average trade made Rs -1.71 before charges and paid Rs 24.92 in charges.
 
 VERDICT: NO EDGE: entries are no better than random, and it loses after charges.
